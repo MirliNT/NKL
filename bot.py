@@ -1,12 +1,17 @@
 import asyncio
+import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramForbiddenError
 from config import BOT_TOKEN, ADMINS, CARD_DETAILS, CRYPTO_DETAILS
 import database
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
@@ -36,14 +41,23 @@ PRICES = {
 }
 
 
+# ====== Проверка бана ======
+async def check_ban(user_id: int) -> bool:
+    banned = await database.is_banned(user_id)
+    if banned:
+        await bot.send_message(user_id, "❌ Вы заблокированы.")
+        return True
+    return False
+
+
 # ====== /start ======
 
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     await database.add_user(message.from_user.id)
 
-    if await database.is_banned(message.from_user.id):
-        return await message.answer("❌ Вы заблокированы.")
+    if await check_ban(message.from_user.id):
+        return
 
     kb = InlineKeyboardBuilder()
     kb.button(text="🛒 Заказать накрутку", callback_data="order")
@@ -52,38 +66,41 @@ async def start_handler(message: Message):
     kb.button(text="❓ Частые вопросы", callback_data="faq")
     kb.adjust(1)
 
-    photo = FSInputFile("photo.jpg")  # добавь свою картинку
-
-    await message.answer_photo(
-        photo,
-        caption="Добро пожаловать в наш шоп 🚀",
-        reply_markup=kb.as_markup()
-    )
+    # Попытка отправить фото, если файла нет – только текст
+    try:
+        photo = FSInputFile("photo.jpg")
+        await message.answer_photo(
+            photo,
+            caption="Добро пожаловать в наш шоп 🚀",
+            reply_markup=kb.as_markup()
+        )
+    except FileNotFoundError:
+        await message.answer(
+            "Добро пожаловать в наш шоп 🚀",
+            reply_markup=kb.as_markup()
+        )
 
 
 # ====== ЗАКАЗ ======
 
 @dp.callback_query(F.data == "order")
 async def order_menu(call: CallbackQuery):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписчики", callback_data="subscribers")
     kb.button(text="Просмотры", callback_data="views")
     kb.button(text="Реакции", callback_data="reactions")
     kb.adjust(1)
+    await call.message.edit_text("Выберите услугу:", reply_markup=kb.as_markup())
 
-    if call.message.photo:
-        await call.message.edit_caption(
-            caption="Выберите услугу:",
-            reply_markup=kb.as_markup()
-        )
-    else:
-        await call.message.edit_text(
-            text="Выберите услугу:",
-            reply_markup=kb.as_markup()
-        )
 
 @dp.callback_query(F.data.in_(["subscribers", "views", "reactions"]))
 async def choose_service(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     await state.update_data(service=call.data)
     await call.message.answer("Введите количество:")
     await state.set_state(OrderState.waiting_quantity)
@@ -91,7 +108,10 @@ async def choose_service(call: CallbackQuery, state: FSMContext):
 
 @dp.message(OrderState.waiting_quantity)
 async def get_quantity(message: Message, state: FSMContext):
-    if not message.text.isdigit():
+    if await check_ban(message.from_user.id):
+        return await state.clear()
+
+    if not message.text or not message.text.isdigit():
         return await message.answer("Введите число!")
 
     quantity = int(message.text)
@@ -108,18 +128,37 @@ async def get_quantity(message: Message, state: FSMContext):
 
 @dp.message(OrderState.waiting_link)
 async def get_link(message: Message, state: FSMContext):
+    if await check_ban(message.from_user.id):
+        return await state.clear()
+
+    link = message.text.strip()
+    # Простейшая проверка ссылки
+    if not link.startswith(("http://", "https://")):
+        return await message.answer("Пожалуйста, отправьте корректную ссылку, начинающуюся с http:// или https://")
+
     data = await state.get_data()
 
-    order_id = await database.create_order(
-        message.from_user.id,
-        data["service"],
-        data["quantity"],
-        data["price"],
-        message.text
-    )
+    try:
+        order_id = await database.create_order(
+            message.from_user.id,
+            data["service"],
+            data["quantity"],
+            data["price"],
+            link
+        )
+    except Exception as e:
+        logging.error(f"DB error: {e}")
+        return await message.answer("Ошибка при создании заказа. Попробуйте позже.")
 
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Проверить платёж", callback_data=f"check_{order_id}")
+
+    # Формируем реквизиты, только если они не пустые
+    payment_info = ""
+    if CARD_DETAILS:
+        payment_info += f"\n{CARD_DETAILS}"
+    if CRYPTO_DETAILS:
+        payment_info += f"\n{CRYPTO_DETAILS}"
 
     await message.answer(
         f"""
@@ -128,10 +167,8 @@ async def get_link(message: Message, state: FSMContext):
 Услуга: {data['service']}
 Кол-во: {data['quantity']}
 Цена: {data['price']} руб
-Ссылка: {message.text}
-
-{CARD_DETAILS}
-{CRYPTO_DETAILS}
+Ссылка: {link}
+{payment_info}
 """,
         reply_markup=kb.as_markup()
     )
@@ -141,7 +178,22 @@ async def get_link(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("check_"))
 async def check_payment(call: CallbackQuery):
-    order_id = int(call.data.split("_")[1])
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
+
+    try:
+        order_id = int(call.data.split("_")[1])
+    except ValueError:
+        return await call.message.answer("Некорректный номер заказа.")
+
+    # Проверим, не обработан ли уже заказ
+    order = await database.get_order(order_id)
+    if not order:
+        return await call.message.answer("Заказ не найден.")
+    if order[3] not in ("NEW", "PENDING"):  # предполагаем, что статус хранится в 4-м столбце
+        return await call.message.answer("Этот заказ уже обработан.")
+
     await call.message.answer("⏳ Заказ обрабатывается...")
 
     kb = InlineKeyboardBuilder()
@@ -149,30 +201,75 @@ async def check_payment(call: CallbackQuery):
     kb.button(text="❌ Отклонить", callback_data=f"decline_{order_id}")
 
     for admin in ADMINS:
-        await bot.send_message(
-            admin,
-            f"#НОВЫЙ_ЗАКАЗ\nID: {order_id}",
-            reply_markup=kb.as_markup()
-        )
+        try:
+            await bot.send_message(
+                admin,
+                f"#НОВЫЙ_ЗАКАЗ\nID: {order_id}",
+                reply_markup=kb.as_markup()
+            )
+        except Exception as e:
+            logging.error(f"Failed to send to admin {admin}: {e}")
 
 
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_order(call: CallbackQuery):
-    order_id = int(call.data.split("_")[1])
-    order = await database.get_order(order_id)
+    await call.answer()
+    if call.from_user.id not in ADMINS:
+        return
 
+    try:
+        order_id = int(call.data.split("_")[1])
+    except ValueError:
+        return await call.message.answer("Некорректный номер заказа.")
+
+    order = await database.get_order(order_id)
+    if not order:
+        return await call.message.answer("Заказ не найден.")
+
+    # Обновляем статус
     await database.update_order_status(order_id, "ACCEPTED", "Принят")
-    await bot.send_message(order[1], "✅ Ваш заказ принят!")
+
+    # Убираем кнопки у админа
+    await call.message.edit_text(call.message.text, reply_markup=None)
+
+    # Уведомляем пользователя
+    try:
+        await bot.send_message(order[1], "✅ Ваш заказ принят!")
+    except TelegramForbiddenError:
+        logging.warning(f"User {order[1]} blocked the bot.")
+    except Exception as e:
+        logging.error(f"Error sending to user: {e}")
+
     await call.message.answer("Заказ подтверждён.")
 
 
 @dp.callback_query(F.data.startswith("decline_"))
 async def decline_order(call: CallbackQuery):
-    order_id = int(call.data.split("_")[1])
+    await call.answer()
+    if call.from_user.id not in ADMINS:
+        return
+
+    try:
+        order_id = int(call.data.split("_")[1])
+    except ValueError:
+        return await call.message.answer("Некорректный номер заказа.")
+
     order = await database.get_order(order_id)
+    if not order:
+        return await call.message.answer("Заказ не найден.")
 
     await database.update_order_status(order_id, "DECLINED", "Отклонён")
-    await bot.send_message(order[1], "❌ Ваш заказ отклонён.")
+
+    # Убираем кнопки
+    await call.message.edit_text(call.message.text, reply_markup=None)
+
+    try:
+        await bot.send_message(order[1], "❌ Ваш заказ отклонён.")
+    except TelegramForbiddenError:
+        logging.warning(f"User {order[1]} blocked the bot.")
+    except Exception as e:
+        logging.error(f"Error sending to user: {e}")
+
     await call.message.answer("Заказ отклонён.")
 
 
@@ -180,6 +277,9 @@ async def decline_order(call: CallbackQuery):
 
 @dp.callback_query(F.data == "calc")
 async def calc_menu(call: CallbackQuery):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписчики", callback_data="calc_subscribers")
     kb.button(text="Просмотры", callback_data="calc_views")
@@ -191,6 +291,9 @@ async def calc_menu(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("calc_"))
 async def calc_choose(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     service = call.data.split("_")[1]
     await state.update_data(service=service)
     await call.message.answer("Введите количество:")
@@ -199,9 +302,20 @@ async def calc_choose(call: CallbackQuery, state: FSMContext):
 
 @dp.message(CalcState.waiting_quantity)
 async def calc_result(message: Message, state: FSMContext):
+    if await check_ban(message.from_user.id):
+        return await state.clear()
+
+    if not message.text or not message.text.isdigit():
+        return await message.answer("Введите число!")
+
     quantity = int(message.text)
     data = await state.get_data()
-    price = quantity * PRICES[data["service"]]
+    service = data.get("service")
+    if service not in PRICES:
+        await state.clear()
+        return await message.answer("Ошибка: услуга не найдена. Начните заново.")
+
+    price = quantity * PRICES[service]
 
     await message.answer(f"💰 Стоимость будет: {price} руб.")
     await state.clear()
@@ -211,34 +325,62 @@ async def calc_result(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "support")
 async def support(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     await call.message.answer("Опишите проблему одним сообщением:")
     await state.set_state(TicketState.waiting_text)
 
 
 @dp.message(TicketState.waiting_text)
 async def send_ticket(message: Message, state: FSMContext):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📨 Отправить тикет", callback_data="send_ticket")
+    if await check_ban(message.from_user.id):
+        return await state.clear()
 
     await state.update_data(text=message.text)
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📨 Отправить тикет", callback_data="send_ticket")
+    kb.button(text="❌ Отмена", callback_data="cancel_ticket")
+    kb.adjust(1)
+
     await message.answer("Отправить тикет?", reply_markup=kb.as_markup())
 
 
 @dp.callback_query(F.data == "send_ticket")
 async def ticket_to_admin(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return await state.clear()
+
     data = await state.get_data()
+    text = data.get("text", "Пустое сообщение")
 
     for admin in ADMINS:
-        await bot.send_message(admin, f"#ТИКЕТ\n{data['text']}")
+        try:
+            await bot.send_message(admin, f"#ТИКЕТ от {call.from_user.id}\n{text}")
+        except Exception as e:
+            logging.error(f"Failed to send ticket to admin {admin}: {e}")
 
-    await call.message.answer("✅ Тикет отправлен.")
+    # Убираем кнопки
+    await call.message.edit_text("✅ Тикет отправлен.", reply_markup=None)
     await state.clear()
+
+
+@dp.callback_query(F.data == "cancel_ticket")
+async def cancel_ticket(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    await call.message.edit_text("Отменено.", reply_markup=None)
 
 
 # ====== FAQ ======
 
 @dp.callback_query(F.data == "faq")
 async def faq(call: CallbackQuery):
+    await call.answer()
+    if await check_ban(call.from_user.id):
+        return
     await call.message.edit_text("""
 ❓ Частые вопросы:
 
@@ -256,27 +398,48 @@ async def faq(call: CallbackQuery):
 async def ban_cmd(message: Message):
     if message.from_user.id not in ADMINS:
         return
-    user_id = int(message.text.split()[1])
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /ban <user_id>")
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        return await message.answer("ID должен быть числом.")
     await database.ban_user(user_id)
-    await message.answer("Пользователь забанен.")
+    await message.answer(f"Пользователь {user_id} забанен.")
 
 
 @dp.message(Command("unban"))
 async def unban_cmd(message: Message):
     if message.from_user.id not in ADMINS:
         return
-    user_id = int(message.text.split()[1])
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /unban <user_id>")
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        return await message.answer("ID должен быть числом.")
     await database.unban_user(user_id)
-    await message.answer("Пользователь разбанен.")
+    await message.answer(f"Пользователь {user_id} разбанен.")
 
 
 @dp.message(Command("search"))
 async def search_order(message: Message):
     if message.from_user.id not in ADMINS:
         return
-    order_id = int(message.text.split()[1])
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /search <order_id>")
+    try:
+        order_id = int(args[1])
+    except ValueError:
+        return await message.answer("ID заказа должен быть числом.")
     order = await database.get_order(order_id)
-    await message.answer(str(order))
+    if order:
+        await message.answer(str(order))
+    else:
+        await message.answer("Заказ не найден.")
 
 
 # ====== RUN ======
