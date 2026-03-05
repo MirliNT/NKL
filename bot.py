@@ -35,9 +35,9 @@ class TicketState(StatesGroup):
 # ====== Цены ======
 
 PRICES = {
-    "subscribers": 0.02,
-    "views": 0.01,
-    "reactions": 0.01
+    "subscribers": 0.2,
+    "views": 0.1,
+    "reactions": 0.1
 }
 
 
