@@ -81,15 +81,22 @@ async def show_main_menu(chat_id: int):
     kb.button(text="❓ Частые вопросы", callback_data="faq")
     kb.adjust(1)
 
-    text = """
-<b>Приветствую!</b> ✈️
+    # ВАЖНО: Замените эти ID на те, которые соответствуют вашим эмодзи!
+    # Примеры ID из статьи, они могут не совпадать с вашими.
+    EMOJI_ID_PLANE = "5877700484453634587"   # ID для ✈️
+    EMOJI_ID_USER = "5870994129244131212"     # ID для 👤
+    EMOJI_ID_CHART = "5870891312022032055"    # ID для 📈
+
+    text = f"""
+<b>Приветствую!</b> <tg-emoji emoji-id="{EMOJI_ID_PLANE}">✈️</tg-emoji>
 <b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
 
-</b><blockquote>👤 <b>Тех.поддержка: @support_username
-</b>📈 <b>Наш канал: @channel_username</b></blockquote>
+</b><blockquote><tg-emoji emoji-id="{EMOJI_ID_USER}">👤</tg-emoji> <b>Тех.поддержка: @
+</b><tg-emoji emoji-id="{EMOJI_ID_CHART}">📈</tg-emoji> <b>Наш канал: @</b></blockquote>
 
-<a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
+<a href="https://t.me/">Договор оферты</a> • <a href="https://t.me/">Пользовательское соглашение</a>
     """
+
     try:
         photo = FSInputFile("photo.jpg")
         await bot.send_photo(chat_id, photo, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
