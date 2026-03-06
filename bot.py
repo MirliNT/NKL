@@ -81,22 +81,15 @@ async def show_main_menu(chat_id: int):
     kb.button(text="❓ Частые вопросы", callback_data="faq")
     kb.adjust(1)
 
-    # ВАЖНО: Замените эти ID на те, которые соответствуют вашим эмодзи!
-    # Примеры ID из статьи, они могут не совпадать с вашими.
-    EMOJI_ID_PLANE = "5877700484453634587"   # ID для ✈️
-    EMOJI_ID_USER = "5870994129244131212"     # ID для 👤
-    EMOJI_ID_CHART = "5870891312022032055"    # ID для 📈
-
-    text = f"""
-<b>Приветствую!</b> <tg-emoji emoji-id="{EMOJI_ID_PLANE}">✈️</tg-emoji>
+    text = """
+<b>Приветствую!</b> ✈️
 <b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
 
-</b><blockquote><tg-emoji emoji-id="{EMOJI_ID_USER}">👤</tg-emoji> <b>Тех.поддержка: @
-</b><tg-emoji emoji-id="{EMOJI_ID_CHART}">📈</tg-emoji> <b>Наш канал: @</b></blockquote>
+</b><blockquote>👤 <b>Тех.поддержка: @support_username
+</b>📈 <b>Наш канал: @channel_username</b></blockquote>
 
-<a href="https://t.me/">Договор оферты</a> • <a href="https://t.me/">Пользовательское соглашение</a>
+<a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
     """
-
     try:
         photo = FSInputFile("photo.jpg")
         await bot.send_photo(chat_id, photo, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
@@ -111,32 +104,128 @@ async def start_handler(message: Message):
         return
     await show_main_menu(message.chat.id)
 
-# ====== ЗАКАЗ ======
+# ====== ЗАКАЗ (обновлённые обработчики с прямым API) ======
 @dp.callback_query(F.data == "order")
 async def order_menu(call: CallbackQuery):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Подписчики", callback_data="subscribers")
-    kb.button(text="Просмотры", callback_data="views")
-    kb.button(text="Реакции", callback_data="reactions")
-    kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
-    kb.adjust(1)
-    try:
-        await call.message.delete()
-    except Exception:
-        pass
-    await call.message.answer("Выберите услугу:", reply_markup=kb.as_markup())
+
+    # Формируем inline-клавиатуру вручную
+    keyboard = [
+        [InlineKeyboardButton(text="Подписчики", callback_data="subscribers")],
+        [InlineKeyboardButton(text="Просмотры", callback_data="views")],
+        [InlineKeyboardButton(text="Реакции", callback_data="reactions")],
+        [InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]
+    ]
+
+    # Преобразуем в формат Telegram API
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": btn.text,
+                    "callback_data": btn.callback_data,
+                    **({"icon_custom_emoji_id": btn.icon_custom_emoji_id} if hasattr(btn, 'icon_custom_emoji_id') and btn.icon_custom_emoji_id else {}),
+                    **({"style": btn.style} if hasattr(btn, 'style') and btn.style else {})
+                } for btn in row
+            ] for row in keyboard
+        ]
+    }
+
+    # Текст с кастомными эмодзи
+    text = """
+<b>Заказать услугу</b><tg-emoji emoji-id="5870695289714643076">👤</tg-emoji><b>
+
+Выберите услугу из списка ниже.</b><tg-emoji emoji-id="5870633910337015697">✅</tg-emoji>
+<a href="https://t.me/shiitead">Курс для каждой услуги</a>
+    """
+
+    # Прямой вызов API
+    async with aiohttp.ClientSession() as session:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup
+        }
+
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                logging.error(f"Failed to send order menu via direct API: {await resp.text()}")
+                # Fallback на старый метод
+                kb = InlineKeyboardBuilder()
+                kb.button(text="Подписчики", callback_data="subscribers")
+                kb.button(text="Просмотры", callback_data="views")
+                kb.button(text="Реакции", callback_data="reactions")
+                kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
+                kb.adjust(1)
+                await call.message.answer(
+                    text.replace("<tg-emoji", "<!-- tg-emoji").replace("</tg-emoji>", "-->"),
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML"
+                )
 
 @dp.callback_query(F.data.in_(["subscribers", "views", "reactions"]))
 async def choose_service(call: CallbackQuery, state: FSMContext):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
-    await state.update_data(service=call.data)
-    await call.message.answer("Введите количество:")
+
+    service = call.data
+    await state.update_data(service=service)
+
+    # Выбираем текст в зависимости от услуги
+    if service == "subscribers":
+        text = """
+<tg-emoji emoji-id="5870729082517328189">📊</tg-emoji><b>Тип услуги: Подписчики</b><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji><b>
+Выберете количество подписчиков: от 1 до 100.000 человек
+</b><a href="https://t.me/ineedforyou/5">Курс для каждой услуги</a>
+        """
+    elif service == "reactions":
+        text = """
+<tg-emoji emoji-id="5870729082517328189">📊</tg-emoji><b>Тип услуги: Реакции</b><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji><b>
+Выберете количество подписчиков: от 1 до 1.00.000 человек
+</b><a href="https://t.me/ineedforyou/5">Курс для каждой услуги</a>
+        """
+    else:  # views
+        text = """
+<tg-emoji emoji-id="5870729082517328189">📊</tg-emoji><b>Тип услуги: Просмотры</b><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji><b>
+Выберете количество подписчиков: от 1 до 100.000 человек
+</b><a href="https://t.me/ineedforyou/5">Курс для каждой услуги</a>
+        """
+
+    # Прямой вызов API (без клавиатуры)
+    async with aiohttp.ClientSession() as session:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML"
+        }
+
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                logging.error(f"Failed to send service choice message via direct API: {await resp.text()}")
+                await call.message.answer(
+                    text.replace("<tg-emoji", "<!-- tg-emoji").replace("</tg-emoji>", "-->"),
+                    parse_mode="HTML"
+                )
+
     await state.set_state(OrderState.waiting_quantity)
+
+# ====== Далее идут стандартные обработчики (без изменений) ======
 
 @dp.message(OrderState.waiting_quantity)
 async def get_quantity(message: Message, state: FSMContext):
@@ -203,7 +292,6 @@ async def check_payment(call: CallbackQuery):
     order = await database.get_order(order_id)
     if not order:
         return await call.message.answer("Заказ не найден.")
-    # Индексы: 0-order_id,1-user_id,2-service,3-quantity,4-price,5-link,6-status,7-comment,8-created_at
     if order[6] not in ("NEW", "PENDING"):
         return await call.message.answer("Этот заказ уже обработан.")
     await call.message.answer("⏳ Заказ обрабатывается...")
@@ -293,14 +381,13 @@ async def decline_order_reason(message: Message, state: FSMContext):
     await message.answer(f"❌ Заказ №{order_id} отклонён.\nПричина: {reason}")
     await state.clear()
 
-# ====== КАЛЬКУЛЯТОР (с прямым вызовом API) ======
+# ====== КАЛЬКУЛЯТОР (уже с прямым API) ======
 @dp.callback_query(F.data == "calc")
 async def calc_menu(call: CallbackQuery):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
 
-    # Формируем inline-клавиатуру с кнопками выбора услуги и кнопкой "Назад"
     keyboard = [
         [InlineKeyboardButton(text="Подписчики", callback_data="calc_subscribers")],
         [InlineKeyboardButton(text="Просмотры", callback_data="calc_views")],
@@ -308,7 +395,6 @@ async def calc_menu(call: CallbackQuery):
         [InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]
     ]
 
-    # Преобразуем в формат Telegram API (поддержка новых полей, если они будут добавлены)
     reply_markup = {
         "inline_keyboard": [
             [
@@ -322,7 +408,6 @@ async def calc_menu(call: CallbackQuery):
         ]
     }
 
-    # Текст с кастомными эмодзи
     text = """
 <b>Выберите услугу для подсчета стоимости</b>.
 <blockquote><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji><b>Нынешний курс:
@@ -331,7 +416,6 @@ async def calc_menu(call: CallbackQuery):
 Просмотры: 1 реакция - 0.01₽</b>
 </blockquote>"""
 
-    # Прямой вызов Telegram API
     async with aiohttp.ClientSession() as session:
         try:
             await call.message.delete()
@@ -349,7 +433,6 @@ async def calc_menu(call: CallbackQuery):
         async with session.post(url, json=payload) as resp:
             if resp.status != 200:
                 logging.error(f"Failed to send calc menu via direct API: {await resp.text()}")
-                # Fallback через стандартный метод aiogram
                 kb = InlineKeyboardBuilder()
                 kb.button(text="Подписчики", callback_data="calc_subscribers")
                 kb.button(text="Просмотры", callback_data="calc_views")
@@ -388,14 +471,13 @@ async def calc_result(message: Message, state: FSMContext):
     await message.answer(f"💰 Стоимость будет: {price} руб.")
     await state.clear()
 
-# ====== ТЕХ. ПОДДЕРЖКА (с прямым вызовом API) ======
+# ====== ТЕХ. ПОДДЕРЖКА (уже с прямым API) ======
 @dp.callback_query(F.data == "support")
 async def support(call: CallbackQuery):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
 
-    # Клавиатура с кнопкой "Назад"
     keyboard = [[InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]]
 
     reply_markup = {
