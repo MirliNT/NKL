@@ -291,17 +291,32 @@ async def calc_menu(call: CallbackQuery):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
+
     kb = InlineKeyboardBuilder()
     kb.button(text="Подписчики", callback_data="calc_subscribers")
     kb.button(text="Просмотры", callback_data="calc_views")
     kb.button(text="Реакции", callback_data="calc_reactions")
     kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
     kb.adjust(1)
+
     try:
         await call.message.delete()
     except Exception:
         pass
-    await call.message.answer("Выберите услугу:", reply_markup=kb.as_markup())
+
+    text = """
+<b>Выберите услугу для подсчета стоимости</b>.
+<blockquote><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji><b>Нынешний курс:
+Подписчики: 1 человек - 0.02₽
+Реакции: 1 реакция - 0.01₽
+Просмотры: 1 реакция - 0.01₽</b>
+</blockquote>"""
+
+    await call.message.answer(
+        text,
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML"
+    )
 
 @dp.callback_query(F.data.startswith("calc_"))
 async def calc_choose(call: CallbackQuery, state: FSMContext):
