@@ -3,6 +3,7 @@ import logging
 import random
 import string
 import aiohttp
+import json
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
