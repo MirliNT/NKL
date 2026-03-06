@@ -101,8 +101,8 @@ async def show_main_menu(chat_id: int):
 <b>Приветствую!</b> ✈️
 <b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
 
-</b><blockquote>👤 <b>Тех.поддержка: @support_username
-</b>📈 <b>Наш канал: @channel_username</b></blockquote>
+</b><blockquote>👤 <b>Тех.поддержка: @winix_supports
+</b>📈 <b>Наш канал: @winix_channell</b></blockquote>
 
 <a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
     """
@@ -156,7 +156,7 @@ async def order_menu(call: CallbackQuery):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text="Подписчики", callback_data="subscribers")],
+        [InlineKeyboardButton(text="👤Подписчики", callback_data="subscribers")],
         [InlineKeyboardButton(text="Просмотры", callback_data="views")],
         [InlineKeyboardButton(text="Реакции", callback_data="reactions")],
         [InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]
