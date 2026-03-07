@@ -85,11 +85,11 @@ async def get_all_users():
             return [row[0] for row in rows]
 
 # ====== Заказы ======
-async def create_order(order_id: str, user_id: int, service: str, quantity: int, price: float, link: str):
+async def create_order(order_id: str, user_id: int, service: str, quantity: int, price: float, link: str, status: str = "NEW"):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             'INSERT INTO orders (order_id, user_id, service, quantity, price, link, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (order_id, user_id, service, quantity, price, link, 'NEW')
+            (order_id, user_id, service, quantity, price, link, status)
         )
         await db.commit()
 
