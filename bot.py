@@ -5,13 +5,13 @@ import string
 import aiohttp
 import json
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton, LabeledPrice, PreCheckoutQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError
-from config import BOT_TOKEN, ADMINS as STATIC_ADMINS, CARD_DETAILS, CRYPTO_DETAILS
+from config import BOT_TOKEN, ADMINS as STATIC_ADMINS, CARD_DETAILS, CRYPTO_DETAILS, YOOKASSA_PAYMENT_TOKEN
 import database
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +31,9 @@ class DeclineReason(StatesGroup):
 
 class BroadcastState(StatesGroup):
     waiting_message = State()
+
+class PaymentState(StatesGroup):
+    waiting_for_invoice = State()  # новое состояние после отправки счета
 
 # ====== Цены ======
 PRICES = {
@@ -74,9 +77,8 @@ async def accept_terms(call: CallbackQuery):
     await call.message.edit_text("✅ Вы приняли договор оферты и политику конфиденциальности. Теперь вы можете пользоваться ботом.")
     await show_main_menu(call.from_user.id)
 
-# ====== ГЛАВНОЕ МЕНЮ (с отключением предпросмотра) ======
+# ====== ГЛАВНОЕ МЕНЮ ======
 async def show_main_menu(chat_id: int):
-    # Формируем inline-клавиатуру
     keyboard = [
         [InlineKeyboardButton(text="🛒 Заказать накрутку", callback_data="order")],
         [InlineKeyboardButton(text="🧮 Калькулятор", callback_data="calc")],
@@ -101,8 +103,8 @@ async def show_main_menu(chat_id: int):
 <b>Приветствую!</b> ✈️
 <b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
 
-</b><blockquote>👤 <b>Тех.поддержка: @winix_supports
-</b>📈 <b>Наш канал: @winix_channell</b></blockquote>
+</b><blockquote>👤 <b>Тех.поддержка: @support_username
+</b>📈 <b>Наш канал: @channel_username</b></blockquote>
 
 <a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
     """
@@ -116,7 +118,6 @@ async def show_main_menu(chat_id: int):
             form_data.add_field('parse_mode', 'HTML')
             form_data.add_field('reply_markup', json.dumps(reply_markup))
             form_data.add_field('photo', open('photo.jpg', 'rb'), filename='photo.jpg')
-
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
             async with session.post(url, data=form_data) as resp:
                 if resp.status != 200:
@@ -148,7 +149,7 @@ async def start_handler(message: Message):
         return
     await show_main_menu(message.chat.id)
 
-# ====== ЗАКАЗ (с отключением предпросмотра) ======
+# ====== ЗАКАЗ (обновлён с отправкой счёта) ======
 @dp.callback_query(F.data == "order")
 async def order_menu(call: CallbackQuery):
     await call.answer()
@@ -156,7 +157,7 @@ async def order_menu(call: CallbackQuery):
         return
 
     keyboard = [
-        [InlineKeyboardButton(text="👤Подписчики", callback_data="subscribers")],
+        [InlineKeyboardButton(text="Подписчики", callback_data="subscribers")],
         [InlineKeyboardButton(text="Просмотры", callback_data="views")],
         [InlineKeyboardButton(text="Реакции", callback_data="reactions")],
         [InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]
@@ -277,7 +278,7 @@ async def get_quantity(message: Message, state: FSMContext):
     service = data["service"]
     price = quantity * PRICES[service]
     await state.update_data(quantity=quantity, price=price)
-    await message.answer(f"💰 Стоимость: {price} руб.\n\nОтправьте ссылку(если это накрутка реакций или просмотров, то укажите ссылку на пост):")
+    await message.answer(f"💰 Стоимость: {price} руб.\n\nОтправьте ссылку:")
     await state.set_state(OrderState.waiting_link)
 
 @dp.message(OrderState.waiting_link)
@@ -289,153 +290,116 @@ async def get_link(message: Message, state: FSMContext):
         return await message.answer("Пожалуйста, отправьте корректную ссылку, начинающуюся с http:// или https://")
     data = await state.get_data()
     order_id = generate_order_id()
+    service = data['service']
+    quantity = data['quantity']
+    price = data['price']  # в рублях
+
+    # ===== ИНТЕГРАЦИЯ С ЮKASSA: ОТПРАВКА СЧЁТА =====
+    # Переводим рубли в копейки
+    price_in_kopecks = int(price * 100)
+
+    # Формируем список товаров (один товар)
+    prices = [LabeledPrice(label=f"Услуга: {service}, кол-во: {quantity}", amount=price_in_kopecks)]
+
+    # Данные для чека (ОБЯЗАТЕЛЬНО для ЮKassa)
+    # В реальном боте нужно запросить email/телефон у пользователя заранее
+    # Здесь для примера используем заглушку, но лучше запросить отдельно.
+    receipt_data = {
+        "customer": {
+            "email": "customer@example.com"  # Замените на реальный email!
+        },
+        "items": [
+            {
+                "description": f"{service} x{quantity}",
+                "quantity": 1,  # Если услуга одна, quantity=1, price считается за всё
+                "amount": {
+                    "value": f"{price:.2f}",
+                    "currency": "RUB"
+                },
+                "vat_code": 1  # 1 = без НДС (изменить при необходимости)
+            }
+        ]
+    }
+
+    # Отправляем инвойс
+    await message.answer_invoice(
+        title=f"Заказ №{order_id}",
+        description=f"Услуга: {service}\nКоличество: {quantity}\nСсылка: {link}",
+        payload=order_id,  # Это придёт в successful_payment
+        provider_token=YOOKASSA_PAYMENT_TOKEN,
+        currency="RUB",
+        prices=prices,
+        start_parameter="create_order",
+        provider_data=json.dumps({"receipt": receipt_data}),  # Важно передать как строку JSON
+        # Если хотите запросить email прямо в платежной форме, добавьте:
+        # need_email=True,
+        # send_email_to_provider=True,
+        disable_web_page_preview=True
+    )
+
+    # Сохраняем заказ в БД со статусом PENDING (ожидает оплаты)
     try:
         await database.create_order(
             order_id,
             message.from_user.id,
-            data["service"],
-            data["quantity"],
-            data["price"],
-            link
+            service,
+            quantity,
+            price,
+            link,
+            status="PENDING"  # добавьте этот параметр в функцию create_order (см. database.py)
         )
     except Exception as e:
         logging.error(f"DB error: {e}")
-        return await message.answer("Ошибка при создании заказа. Попробуйте позже.")
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Проверить платёж", callback_data=f"check_{order_id}")
-    payment_info = ""
-    if CARD_DETAILS:
-        payment_info += f"\n{CARD_DETAILS}"
-    if CRYPTO_DETAILS:
-        payment_info += f"\n{CRYPTO_DETAILS}"
-    await message.answer(
-        f"""
-📦 Заказ №{order_id}
+        await message.answer("Ошибка при создании заказа. Попробуйте позже.")
+        return await state.clear()
 
-Услуга: {data['service']}
-Кол-во: {data['quantity']}
-Цена: {data['price']} руб
-Ссылка: {link}
-{payment_info}
-""",
-        reply_markup=kb.as_markup(),
-        disable_web_page_preview=True
-    )
-    await state.clear()
+    # Переходим в состояние ожидания оплаты
+    await state.set_state(PaymentState.waiting_for_invoice)
+    # Не очищаем state полностью, чтобы можно было обработать успешный платёж
 
-@dp.callback_query(F.data.startswith("check_"))
-async def check_payment(call: CallbackQuery):
-    await call.answer()
-    if await check_ban_and_terms(call.from_user.id):
-        return
-    order_id = call.data.split("_")[1]
-    order = await database.get_order(order_id)
-    if not order:
-        return await call.message.answer("Заказ не найден.")
-    if order[6] not in ("NEW", "PENDING"):
-        return await call.message.answer("Этот заказ уже обработан.")
-    await call.message.answer("⏳ Заказ обрабатывается...")
-    service_map = {"subscribers": "Подписчики", "views": "Просмотры", "reactions": "Реакции"}
-    service_name = service_map.get(order[2], order[2])
-    user_id = order[1]
-    username = call.from_user.username or "нет username"
-    text_for_admin = f"""
-# НОВЫЙ ЗАКАЗ
-🆔 Номер заказа: {order_id}
-👤 Пользователь: {user_id} (@{username})
-📦 Услуга: {service_name}
-🔢 Количество: {order[3]}
-💰 Сумма: {order[4]} руб.
-🔗 Ссылка: {order[5]}
-    """
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=f"accept_{order_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"decline_{order_id}")
+# ====== ОБРАБОТЧИК PreCheckoutQuery ======
+@dp.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
+    """Подтверждаем платёж перед списанием средств."""
+    # Можно добавить проверку, что заказ ещё актуален
+    await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+    # Если что-то пошло не так, отправьте:
+    # await bot.answer_pre_checkout_query(pre_checkout_query.id, ok=False, error_message="Причина отказа")
+
+# ====== ОБРАБОТЧИК УСПЕШНОГО ПЛАТЕЖА ======
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: Message, state: FSMContext):
+    """Обрабатываем успешную оплату."""
+    payment_info = message.successful_payment
+    order_id = payment_info.invoice_payload  # тот самый payload из инвойса
+
+    # Обновляем статус заказа в БД на PAID
+    await database.update_order_status(order_id, "PAID", "Оплачено через ЮKassa")
+
+    # Сохраняем payment_charge_id (транзакцию в ЮKassa) для сверки
+    charge_id = payment_info.provider_payment_charge_id
+    # если у вас есть функция для сохранения charge_id:
+    # await database.update_order_payment_charge_id(order_id, charge_id)
+
+    # Уведомляем администраторов
     admins = await database.get_all_admins()
     for admin in admins:
-        try:
-            await bot.send_message(
-                admin,
-                text_for_admin,
-                reply_markup=kb.as_markup(),
-                disable_web_page_preview=True
-            )
-        except Exception as e:
-            logging.error(f"Failed to send to admin {admin}: {e}")
+        await bot.send_message(admin, f"💰 Поступила оплата за заказ №{order_id}")
 
-@dp.callback_query(F.data.startswith("accept_"))
-async def accept_order(call: CallbackQuery):
-    await call.answer()
-    if not await database.is_admin(call.from_user.id):
-        return
-    order_id = call.data.split("_")[1]
-    order = await database.get_order(order_id)
-    if not order:
-        return await call.message.answer("Заказ не найден.")
-    if order[6] not in ("NEW", "PENDING"):
-        return await call.message.answer("Этот заказ уже обработан другим администратором.")
-    await database.update_order_status(order_id, "ACCEPTED", "Принят")
-    await call.message.edit_text(call.message.text + "\n\n✅ Заказ принят.", reply_markup=None)
-    try:
-        await bot.send_message(
-            order[1],
-            f"✅ Ваш заказ №{order_id} принят и будет выполнен в ближайшее время.",
-            disable_web_page_preview=True
-        )
-    except TelegramForbiddenError:
-        logging.warning(f"User {order[1]} blocked the bot.")
-    except Exception as e:
-        logging.error(f"Error sending to user: {e}")
-    service_map = {"subscribers": "Подписчики", "views": "Просмотры", "reactions": "Реакции"}
-    service_name = service_map.get(order[2], order[2])
-    await call.message.answer(
-        f"✅ Заказ №{order_id} выполнен.\n"
-        f"👤 Пользователь: {order[1]}\n"
-        f"📦 Услуга: {service_name}\n"
-        f"🔢 Количество: {order[3]}\n"
-        f"💰 Сумма: {order[4]} руб.\n"
-        f"🔗 Ссылка: {order[5]}",
+    # Уведомляем пользователя
+    await message.answer(
+        f"✅ Оплата по заказу №{order_id} получена!\n"
+        f"Мы начали выполнение вашего заказа.",
         disable_web_page_preview=True
     )
 
-@dp.callback_query(F.data.startswith("decline_"))
-async def decline_order_start(call: CallbackQuery, state: FSMContext):
-    await call.answer()
-    if not await database.is_admin(call.from_user.id):
-        return
-    order_id = call.data.split("_")[1]
-    order = await database.get_order(order_id)
-    if not order:
-        return await call.message.answer("Заказ не найден.")
-    if order[6] not in ("NEW", "PENDING"):
-        return await call.message.answer("Этот заказ уже обработан другим администратором.")
-    await state.update_data(order_id=order_id, order=order)
-    await call.message.answer("Введите причину отклонения заказа (одним сообщением):")
-    await state.set_state(DeclineReason.waiting_reason)
-
-@dp.message(DeclineReason.waiting_reason)
-async def decline_order_reason(message: Message, state: FSMContext):
-    if not await database.is_admin(message.from_user.id):
-        return await state.clear()
-    reason = message.text.strip()
-    data = await state.get_data()
-    order_id = data['order_id']
-    order = data['order']
-    await database.update_order_status(order_id, "DECLINED", f"Отклонён: {reason}")
-    try:
-        await bot.send_message(
-            order[1],
-            f"❌ Ваш заказ №{order_id} отклонён.\nПричина: {reason}",
-            disable_web_page_preview=True
-        )
-    except TelegramForbiddenError:
-        logging.warning(f"User {order[1]} blocked the bot.")
-    except Exception as e:
-        logging.error(f"Error sending to user: {e}")
-    await message.answer(f"❌ Заказ №{order_id} отклонён.\nПричина: {reason}")
+    # Очищаем состояние
     await state.clear()
 
-# ====== КАЛЬКУЛЯТОР (с отключением предпросмотра) ======
+    # Можно сразу показать главное меню
+    await show_main_menu(message.chat.id)
+
+# ====== КАЛЬКУЛЯТОР ======
 @dp.callback_query(F.data == "calc")
 async def calc_menu(call: CallbackQuery):
     await call.answer()
@@ -527,7 +491,7 @@ async def calc_result(message: Message, state: FSMContext):
     await message.answer(f"💰 Стоимость будет: {price} руб.")
     await state.clear()
 
-# ====== ТЕХ. ПОДДЕРЖКА (без ссылок) ======
+# ====== ТЕХ. ПОДДЕРЖКА ======
 @dp.callback_query(F.data == "support")
 async def support(call: CallbackQuery):
     await call.answer()
@@ -584,7 +548,7 @@ async def support(call: CallbackQuery):
                     disable_web_page_preview=True
                 )
 
-# ====== FAQ (с отключением предпросмотра) ======
+# ====== FAQ ======
 @dp.callback_query(F.data == "faq")
 async def faq(call: CallbackQuery):
     await call.answer()
@@ -746,29 +710,8 @@ async def remove_admin(message: Message):
 async def broadcast_command(message: Message, state: FSMContext):
     if not await is_admin_from_db_or_config(message.from_user.id):
         return
-    # Проверяем, есть ли текст после команды
-    parts = message.text.split(maxsplit=1)
-    if len(parts) > 1:
-        # Есть текст – отправляем рассылку сразу
-        text = parts[1]
-        users = await database.get_all_users()
-        await message.answer(f"Начинаю рассылку текста {len(users)} пользователям...")
-        sent = 0
-        blocked = 0
-        for user_id in users:
-            try:
-                await bot.send_message(user_id, text, disable_web_page_preview=True)
-                sent += 1
-                await asyncio.sleep(0.05)
-            except TelegramForbiddenError:
-                blocked += 1
-            except Exception as e:
-                logging.error(f"Failed to send to {user_id}: {e}")
-        await message.answer(f"Рассылка завершена.\nОтправлено: {sent}\nЗаблокировали бота: {blocked}")
-    else:
-        # Нет текста – переходим в режим ожидания сообщения
-        await message.answer("Отправьте сообщение для рассылки всем пользователям (можно с медиа).")
-        await state.set_state(BroadcastState.waiting_message)
+    await message.answer("Отправьте сообщение для рассылки всем пользователям (можно с медиа).")
+    await state.set_state(BroadcastState.waiting_message)
 
 @dp.message(BroadcastState.waiting_message)
 async def broadcast_message(message: Message, state: FSMContext):
