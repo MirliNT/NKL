@@ -31,10 +31,18 @@ async def init_db():
                 link TEXT,
                 status TEXT DEFAULT 'NEW',
                 comment TEXT,
+                payment_id TEXT,
                 payment_charge_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # Проверяем наличие колонки payment_id (на случай, если таблица уже существовала без неё)
+        try:
+            await db.execute('SELECT payment_id FROM orders LIMIT 1')
+        except aiosqlite.OperationalError:
+            await db.execute('ALTER TABLE orders ADD COLUMN payment_id TEXT')
+            logging.info("Column 'payment_id' added to orders table.")
 
         # Таблица администраторов
         await db.execute('''
@@ -107,7 +115,17 @@ async def update_order_status(order_id: str, status: str, comment: str = None):
         )
         await db.commit()
 
+async def update_order_payment_id(order_id: str, payment_id: str):
+    """Сохраняет ID платежа ЮKassa для заказа."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE orders SET payment_id = ? WHERE order_id = ?',
+            (payment_id, order_id)
+        )
+        await db.commit()
+
 async def update_order_payment_charge_id(order_id: str, charge_id: str):
+    """Сохраняет идентификатор транзакции в платёжной системе (опционально)."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             'UPDATE orders SET payment_charge_id = ? WHERE order_id = ?',
