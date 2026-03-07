@@ -5,7 +5,7 @@ DB_PATH = "bot_database.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица пользователей (базовая)
+        # Таблица пользователей
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -13,7 +13,7 @@ async def init_db():
             )
         ''')
 
-        # Проверяем наличие колонки accepted_terms и добавляем, если нужно
+        # Проверяем наличие колонки accepted_terms
         try:
             await db.execute('SELECT accepted_terms FROM users LIMIT 1')
         except aiosqlite.OperationalError:
@@ -31,6 +31,7 @@ async def init_db():
                 link TEXT,
                 status TEXT DEFAULT 'NEW',
                 comment TEXT,
+                payment_charge_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -106,6 +107,14 @@ async def update_order_status(order_id: str, status: str, comment: str = None):
         )
         await db.commit()
 
+async def update_order_payment_charge_id(order_id: str, charge_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            'UPDATE orders SET payment_charge_id = ? WHERE order_id = ?',
+            (charge_id, order_id)
+        )
+        await db.commit()
+
 # ====== Администраторы ======
 async def add_admin(user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -127,9 +136,3 @@ async def get_all_admins():
         async with db.execute('SELECT user_id FROM admins') as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
-#платежка
-
-async def update_order_payment_charge_id(order_id: str, charge_id: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute('UPDATE orders SET payment_charge_id = ? WHERE order_id = ?', (charge_id, order_id))
-        await db.commit()
