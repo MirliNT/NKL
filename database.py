@@ -127,3 +127,9 @@ async def get_all_admins():
         async with db.execute('SELECT user_id FROM admins') as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
+#платежка
+
+async def update_order_payment_charge_id(order_id: str, charge_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE orders SET payment_charge_id = ? WHERE order_id = ?', (charge_id, order_id))
+        await db.commit()
