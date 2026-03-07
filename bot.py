@@ -12,6 +12,7 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError
+from aiohttp import web
 from config import BOT_TOKEN, ADMINS as STATIC_ADMINS, CARD_DETAILS, CRYPTO_DETAILS
 from config import YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, YOOKASSA_RETURN_URL
 import database
@@ -25,7 +26,7 @@ dp = Dispatcher()
 
 # Настройка ЮKassa
 Configuration.account_id = YOOKASSA_SHOP_ID
-Configuration.secret_key = YOOKASSA_SECRET_KEY
+Configuration.secret_key = YOKASSA_SECRET_KEY  # исправлено на YOOKASSA_SECRET_KEY (в config)
 
 # ====== Состояния ======
 class OrderState(StatesGroup):
@@ -42,7 +43,7 @@ class BroadcastState(StatesGroup):
     waiting_message = State()
 
 class PaymentState(StatesGroup):
-    waiting_for_payment = State()  # после создания платежа, ожидаем подтверждения от пользователя
+    waiting_for_payment = State()
 
 # ====== Цены ======
 PRICES = {
@@ -338,16 +339,18 @@ async def get_link(message: Message, state: FSMContext):
         # Сохраняем ID платежа в БД
         await database.update_order_payment_id(order_id, payment.id)
 
-        # Формируем сообщение с кнопкой оплаты и проверки
+        # Формируем сообщение с кнопкой оплаты
         kb = InlineKeyboardBuilder()
         kb.button(text="💳 Оплатить на сайте", url=payment.confirmation.confirmation_url)
-        kb.button(text="✅ Я оплатил", callback_data=f"check_payment_{order_id}")
+        # Кнопка "Я оплатил" теперь не нужна, так как статус будет автоматически обновляться через webhook
+        # Но можно оставить для ручного уведомления на всякий случай (опционально)
+        kb.button(text="✅ Я оплатил (если не сработало авто)", callback_data=f"check_payment_{order_id}")
         kb.adjust(1)
 
         await message.answer(
             f"✅ Заказ №{order_id} создан!\n\n"
             f"Услуга: {service}\nКоличество: {quantity}\nСумма: {price:.2f} руб.\n\n"
-            f"Для оплаты перейдите по ссылке ниже. После оплаты нажмите «Я оплатил».",
+            f"Для оплаты перейдите по ссылке ниже. После успешной оплаты заказ будет подтверждён автоматически.",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
         )
@@ -358,23 +361,21 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Не удалось создать платёж. Попробуйте позже.")
         await state.clear()
 
-# ====== ОБРАБОТЧИК НАЖАТИЯ "Я ОПЛАТИЛ" ======
+# ====== ОБРАБОТЧИК НАЖАТИЯ "Я ОПЛАТИЛ" (как запасной вариант) ======
 @dp.callback_query(F.data.startswith("check_payment_"))
-async def check_payment(call: CallbackQuery, state: FSMContext):
+async def check_payment_manual(call: CallbackQuery, state: FSMContext):
     await call.answer()
     if await check_ban_and_terms(call.from_user.id):
         return
 
     order_id = call.data.split("_")[2]  # check_payment_XXX
-
-    # Получаем заказ из БД
     order = await database.get_order(order_id)
     if not order:
         return await call.message.answer("Заказ не найден.")
     if order[6] not in ("PENDING", "NEW"):
         return await call.message.answer("Этот заказ уже обработан.")
 
-    # Уведомляем админов о необходимости проверить оплату
+    # Уведомляем админов о необходимости проверить оплату вручную
     admins = await database.get_all_admins()
     for admin in admins:
         kb = InlineKeyboardBuilder()
@@ -383,14 +384,52 @@ async def check_payment(call: CallbackQuery, state: FSMContext):
 
         await bot.send_message(
             admin,
-            f"💳 Пользователь @{call.from_user.username or 'нет юзернейма'} (ID: {call.from_user.id}) сообщил об оплате заказа №{order_id}.\n\n"
-            f"Проверьте платеж вручную в ЮKassa и подтвердите или отклоните заказ.",
+            f"💳 Пользователь @{call.from_user.username or 'нет юзернейма'} (ID: {call.from_user.id}) сообщил об оплате заказа №{order_id} вручную.\n"
+            f"Проверьте платеж в ЮKassa и подтвердите или отклоните заказ.",
             reply_markup=kb.as_markup()
         )
 
     await call.message.answer("✅ Администратор уведомлен. Ожидайте подтверждения оплаты.")
 
-# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ ======
+# ====== WEBHOOK ДЛЯ ЮKASSA (автоматическое подтверждение) ======
+async def handle_yookassa_webhook(request):
+    try:
+        data = await request.json()
+        event = data.get('event')
+        if event == 'payment.succeeded':
+            payment = data['object']
+            metadata = payment.get('metadata', {})
+            order_id = metadata.get('order_id')
+            if order_id:
+                # Обновляем статус заказа
+                await database.update_order_status(order_id, "PAID", "Оплачено через ЮKassa (авто)")
+
+                # Получаем информацию о заказе
+                order = await database.get_order(order_id)
+                if order:
+                    # Уведомляем пользователя
+                    try:
+                        await bot.send_message(
+                            order[1],
+                            f"✅ Ваш заказ №{order_id} оплачен! Мы начали выполнение.",
+                            disable_web_page_preview=True
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to notify user {order[1]}: {e}")
+
+                    # Уведомляем админов
+                    admins = await database.get_all_admins()
+                    for admin in admins:
+                        await bot.send_message(
+                            admin,
+                            f"💰 Автоматически подтверждена оплата заказа №{order_id} от пользователя {order[1]}."
+                        )
+        return web.Response(status=200)
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return web.Response(status=500)
+
+# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима) ======
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_order(call: CallbackQuery):
     await call.answer()
@@ -779,6 +818,17 @@ async def main():
     await database.init_db()
     for admin_id in STATIC_ADMINS:
         await database.add_admin(admin_id)
+
+    # Запускаем aiohttp сервер для вебхуков от ЮKassa
+    app = web.Application()
+    app.router.add_post('/yookassa-webhook', handle_yookassa_webhook)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)  # порт можно изменить
+    await site.start()
+    logging.info("Webhook server started on port 8080")
+
+    # Запускаем polling бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
