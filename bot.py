@@ -15,7 +15,7 @@ from aiogram.filters import Command
 from aiogram.exceptions import TelegramForbiddenError
 from config import (
     BOT_TOKEN, ADMINS as STATIC_ADMINS,
-    YOOKASSA_SHOP_ID, YOKASSA_SECRET_KEY, YOOKASSA_RETURN_URL,
+    YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY, YOOKASSA_RETURN_URL,
     HELEKET_API_KEY, HELEKET_API_URL, HELEKET_RETURN_URL
 )
 import database
