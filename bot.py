@@ -19,6 +19,7 @@ from config import (
     HELEKET_API_KEY, HELEKET_API_URL, HELEKET_RETURN_URL
 )
 import database
+from yookassa import Configuration, Payment
 
 # Импорт библиотеки aiosqlite для прямых запросов (используется в /fixdb)
 import aiosqlite
