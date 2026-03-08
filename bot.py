@@ -290,6 +290,8 @@ async def get_quantity(message: Message, state: FSMContext):
 # ====== ОБРАБОТКА ССЫЛКИ И СОЗДАНИЕ ПЛАТЕЖА В ЮKASSA ======
 @dp.message(OrderState.waiting_link)
 async def get_link(message: Message, state: FSMContext):
+logging.info(f"About to save: payment.id = {payment.id}, type = {type(payment.id)}")
+await database.update_order_payment_id(order_id, payment.id)
     if await check_ban_and_terms(message.from_user.id):
         return await state.clear()
     link = message.text.strip()
