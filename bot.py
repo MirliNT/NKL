@@ -20,6 +20,8 @@ import database
 
 # Импорт библиотеки ЮKassa
 from yookassa import Configuration, Payment
+from yookassa.domain.notification import WebhookNotificationEventType
+from yookassa.domain.common import SecurityHelper
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
@@ -338,9 +340,15 @@ async def get_link(message: Message, state: FSMContext):
         }, idempotence_key)
 
         # Сохраняем ID платежа в БД
-        await database.update_order_payment_id(order_id, payment.id)
+        if not payment.id:
+            logging.error("Payment created without ID!")
+            await message.answer("Ошибка при создании платежа: не получен ID.")
+            return await state.clear()
 
-        # Формируем сообщение с кнопкой оплаты (кнопка "Я оплатил" больше не нужна)
+        await database.update_order_payment_id(order_id, payment.id)
+        logging.info(f"Saved payment_id {payment.id} for order {order_id}")
+
+        # Формируем сообщение с кнопкой оплаты
         kb = InlineKeyboardBuilder()
         kb.button(text="💳 Оплатить на сайте", url=payment.confirmation.confirmation_url)
         kb.adjust(1)
@@ -359,56 +367,63 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Не удалось создать платёж. Попробуйте позже.")
         await state.clear()
 
-# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ ======
+# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ (POLLING) ======
 async def check_payments_status():
     """Каждые 30 секунд проверяет статусы всех платежей со статусом PENDING."""
     while True:
         try:
-            # Получаем все заказы со статусом PENDING
-            # Для этого нужна новая функция в database.py
             pending_orders = await database.get_pending_orders()
+            if pending_orders:
+                logging.info(f"Checking {len(pending_orders)} pending orders...")
             for order in pending_orders:
-                order_id = order[0]  # order_id
-                payment_id = order[8]  # payment_id (индекс 8, если порядок полей: order_id, user_id, service, quantity, price, link, status, comment, payment_id, payment_charge_id, created_at)
+                order_id = order[0]
+                payment_id = order[8]  # индекс 8 — payment_id (в соответствии с порядком полей в create_order)
                 if not payment_id:
+                    logging.warning(f"Order {order_id} has no payment_id, skipping.")
                     continue
 
-                # Запрашиваем статус платежа у ЮKassa
-                payment = Payment.find_one(payment_id)
-                if payment.status == 'succeeded':
-                    # Обновляем статус заказа
-                    await database.update_order_status(order_id, "PAID", "Оплачено через ЮKassa (авто)")
+                logging.info(f"Checking order {order_id}, payment_id: {payment_id}")
+                try:
+                    # Запрашиваем статус платежа у ЮKassa
+                    payment = Payment.find_one(payment_id)
+                    logging.info(f"Payment {payment_id} status: {payment.status}")
+                    if payment.status == 'succeeded':
+                        # Обновляем статус заказа
+                        await database.update_order_status(order_id, "PAID", "Оплачено через ЮKassa (авто)")
 
-                    # Уведомляем пользователя
-                    user_id = order[1]
-                    try:
-                        await bot.send_message(
-                            user_id,
-                            f"✅ Ваш заказ №{order_id} оплачен! Мы начали выполнение.",
-                            disable_web_page_preview=True
-                        )
-                        logging.info(f"User {user_id} notified about payment for order {order_id}")
-                    except Exception as e:
-                        logging.error(f"Failed to notify user {user_id}: {e}")
-
-                    # Уведомляем администраторов
-                    admins = await database.get_all_admins()
-                    for admin in admins:
+                        # Уведомляем пользователя
+                        user_id = order[1]
                         try:
                             await bot.send_message(
-                                admin,
-                                f"💰 Автоматически подтверждена оплата заказа №{order_id} от пользователя {user_id}."
+                                user_id,
+                                f"✅ Ваш заказ №{order_id} оплачен! Мы начали выполнение.",
+                                disable_web_page_preview=True
                             )
+                            logging.info(f"User {user_id} notified about payment for order {order_id}")
                         except Exception as e:
-                            logging.error(f"Failed to notify admin {admin}: {e}")
+                            logging.error(f"Failed to notify user {user_id}: {e}")
 
-                    logging.info(f"Order {order_id} marked as PAID via polling")
+                        # Уведомляем администраторов
+                        admins = await database.get_all_admins()
+                        for admin in admins:
+                            try:
+                                await bot.send_message(
+                                    admin,
+                                    f"💰 Автоматически подтверждена оплата заказа №{order_id} от пользователя {user_id}."
+                                )
+                            except Exception as e:
+                                logging.error(f"Failed to notify admin {admin}: {e}")
+
+                        logging.info(f"Order {order_id} marked as PAID via polling")
+                except Exception as e:
+                    # Ловим ошибки от ЮKassa (например, not_found)
+                    logging.error(f"Error checking payment {payment_id} for order {order_id}: {e}")
         except Exception as e:
             logging.error(f"Error in payment status checker: {e}")
 
-        await asyncio.sleep(30)  # проверка каждые 30 секунд
+        await asyncio.sleep(30)
 
-# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима) ======
+# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима, если потребуется) ======
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_order(call: CallbackQuery):
     await call.answer()
