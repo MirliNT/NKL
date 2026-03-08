@@ -4,7 +4,6 @@ import logging
 DB_PATH = "bot_database.db"
 
 async def init_db():
-    """Инициализация базы данных: создание таблиц и добавление недостающих колонок."""
     async with aiosqlite.connect(DB_PATH) as db:
         # Таблица пользователей
         await db.execute('''
@@ -14,7 +13,6 @@ async def init_db():
             )
         ''')
 
-        # Проверяем наличие колонки accepted_terms
         try:
             await db.execute('SELECT accepted_terms FROM users LIMIT 1')
         except aiosqlite.OperationalError:
@@ -39,28 +37,24 @@ async def init_db():
             )
         ''')
 
-        # Проверяем наличие колонки payment_id
         try:
             await db.execute('SELECT payment_id FROM orders LIMIT 1')
         except aiosqlite.OperationalError:
             await db.execute('ALTER TABLE orders ADD COLUMN payment_id TEXT')
             logging.info("Column 'payment_id' added to orders table.")
 
-        # Проверяем наличие колонки payment_charge_id
         try:
             await db.execute('SELECT payment_charge_id FROM orders LIMIT 1')
         except aiosqlite.OperationalError:
             await db.execute('ALTER TABLE orders ADD COLUMN payment_charge_id TEXT')
             logging.info("Column 'payment_charge_id' added to orders table.")
 
-        # Проверяем наличие колонки payment_method
         try:
             await db.execute('SELECT payment_method FROM orders LIMIT 1')
         except aiosqlite.OperationalError:
             await db.execute('ALTER TABLE orders ADD COLUMN payment_method TEXT')
             logging.info("Column 'payment_method' added to orders table.")
 
-        # Таблица администраторов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY
