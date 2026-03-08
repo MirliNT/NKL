@@ -5,6 +5,7 @@ import string
 import aiohttp
 import json
 import uuid
+import base64
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -18,16 +19,9 @@ from config import (
 )
 import database
 
-# Импорт библиотеки ЮKassa
-from yookassa import Configuration, Payment
-
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
-# Настройка ЮKassa
-Configuration.account_id = YOOKASSA_SHOP_ID
-Configuration.secret_key = YOOKASSA_SECRET_KEY
 
 # ====== Состояния ======
 class OrderState(StatesGroup):
@@ -287,7 +281,42 @@ async def get_quantity(message: Message, state: FSMContext):
     await message.answer(f"💰 Стоимость: {price} руб.\n\nОтправьте ссылку:")
     await state.set_state(OrderState.waiting_link)
 
-# ====== ОБРАБОТКА ССЫЛКИ И СОЗДАНИЕ ПЛАТЕЖА В ЮKASSA ======
+# ====== НОВАЯ ФУНКЦИЯ: ПРЯМОЙ ЗАПРОС К ЮKASSA ======
+async def create_yookassa_payment(amount: float, description: str, order_id: str, user_id: int):
+    """Создаёт платёж через прямое обращение к API ЮKassa."""
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json",
+        "Idempotence-Key": str(uuid.uuid4())
+    }
+    data = {
+        "amount": {
+            "value": f"{amount:.2f}",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": YOOKASSA_RETURN_URL
+        },
+        "capture": True,
+        "description": description,
+        "metadata": {
+            "order_id": order_id,
+            "user_id": user_id
+        }
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://api.yookassa.ru/v3/payments", headers=headers, json=data) as resp:
+            response_text = await resp.text()
+            logging.info(f"YooKassa response status: {resp.status}")
+            logging.info(f"YooKassa response body: {response_text}")
+            if resp.status != 200:
+                raise Exception(f"YooKassa error {resp.status}: {response_text}")
+            return json.loads(response_text)
+
+# ====== ОБРАБОТКА ССЫЛКИ И СОЗДАНИЕ ПЛАТЕЖА ======
 @dp.message(OrderState.waiting_link)
 async def get_link(message: Message, state: FSMContext):
     if await check_ban_and_terms(message.from_user.id):
@@ -299,7 +328,7 @@ async def get_link(message: Message, state: FSMContext):
     order_id = generate_order_id()
     service = data['service']
     quantity = data['quantity']
-    price = data['price']  # float
+    price = data['price']
 
     # Сохраняем заказ в БД со статусом PENDING
     try:
@@ -317,54 +346,28 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Ошибка при создании заказа. Попробуйте позже.")
         return await state.clear()
 
-    # Создание платежа в ЮKassa
+    # Создаём платёж через ЮKassa
     try:
-        idempotence_key = str(uuid.uuid4())
-        payment = Payment.create({
-            "amount": {
-                "value": f"{price:.2f}",
-                "currency": "RUB"
-            },
-            "confirmation": {
-                "type": "redirect",
-                "return_url": YOOKASSA_RETURN_URL
-            },
-            "capture": True,
-            "description": f"Заказ {order_id}: {service} x{quantity}",
-            "metadata": {
-                "order_id": order_id,
-                "user_id": message.from_user.id
-            }
-        }, idempotence_key)
+        payment_data = await create_yookassa_payment(
+            amount=price,
+            description=f"Заказ {order_id}: {service} x{quantity}",
+            order_id=order_id,
+            user_id=message.from_user.id
+        )
 
-        # Подробное логирование объекта payment
-        logging.info("=== ПОДРОБНЫЙ ОТВЕТ ЮKASSA ===")
-        logging.info(f"Тип объекта payment: {type(payment)}")
-        logging.info(f"Все атрибуты payment: {dir(payment)}")
-        logging.info(f"payment.id: {payment.id} (тип: {type(payment.id)})")
-        logging.info(f"payment.status: {payment.status}")
-        logging.info(f"payment.created_at: {payment.created_at}")
-        logging.info(f"payment.amount: {payment.amount}")
+        # Извлекаем ID платежа и ссылку для подтверждения
+        payment_id = payment_data.get('id')
+        confirmation_url = payment_data.get('confirmation', {}).get('confirmation_url')
 
-        # Сохраняем ID платежа в БД
-        if not payment.id:
-            logging.error("Payment created without ID!")
-            await message.answer("Ошибка при создании платежа: не получен ID.")
-            return await state.clear()
+        if not payment_id or not confirmation_url:
+            raise Exception("Missing payment_id or confirmation_url in response")
 
-        # Убедимся, что payment.id - строка (приводим на всякий случай)
-        payment_id_str = str(payment.id)
-        logging.info(f"Сохраняем payment_id: {payment_id_str}")
-        await database.update_order_payment_id(order_id, payment_id_str)
-
-        # Проверим, что сохранилось (прочитаем заказ)
-        order_check = await database.get_order(order_id)
-        if order_check:
-            logging.info(f"После сохранения: payment_id в БД = {order_check[8]}")
+        logging.info(f"Payment ID from YooKassa: {payment_id}")
+        await database.update_order_payment_id(order_id, payment_id)
 
         # Формируем сообщение с кнопкой оплаты
         kb = InlineKeyboardBuilder()
-        kb.button(text="💳 Оплатить на сайте", url=payment.confirmation.confirmation_url)
+        kb.button(text="💳 Оплатить на сайте", url=confirmation_url)
         kb.adjust(1)
 
         await message.answer(
@@ -381,9 +384,19 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Не удалось создать платёж. Попробуйте позже.")
         await state.clear()
 
+# ====== ФУНКЦИЯ ПРОВЕРКИ СТАТУСА ПЛАТЕЖА ЧЕРЕЗ ПРЯМОЙ ЗАПРОС ======
+async def check_payment_status(payment_id: str):
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            return data.get('status')
+
 # ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ ======
 async def check_payments_status():
-    """Каждые 30 секунд проверяет статусы всех платежей со статусом PENDING."""
     while True:
         try:
             pending_orders = await database.get_pending_orders()
@@ -391,21 +404,18 @@ async def check_payments_status():
                 logging.info(f"Checking {len(pending_orders)} pending orders...")
             for order in pending_orders:
                 order_id = order[0]
-                payment_id = order[8]  # индекс 8 — payment_id
+                payment_id = order[8]
                 if not payment_id:
                     logging.warning(f"Order {order_id} has no payment_id, skipping.")
                     continue
 
                 logging.info(f"Checking order {order_id}, payment_id: {payment_id}")
                 try:
-                    # Запрашиваем статус платежа у ЮKassa
-                    payment = Payment.find_one(payment_id)
-                    logging.info(f"Payment {payment_id} status: {payment.status}")
-                    if payment.status == 'succeeded':
-                        # Обновляем статус заказа
+                    status = await check_payment_status(payment_id)
+                    logging.info(f"Payment {payment_id} status: {status}")
+                    if status == 'succeeded':
                         await database.update_order_status(order_id, "PAID", "Оплачено через ЮKassa (авто)")
 
-                        # Уведомляем пользователя
                         user_id = order[1]
                         try:
                             await bot.send_message(
@@ -417,7 +427,6 @@ async def check_payments_status():
                         except Exception as e:
                             logging.error(f"Failed to notify user {user_id}: {e}")
 
-                        # Уведомляем администраторов
                         admins = await database.get_all_admins()
                         for admin in admins:
                             try:
@@ -430,14 +439,13 @@ async def check_payments_status():
 
                         logging.info(f"Order {order_id} marked as PAID via polling")
                 except Exception as e:
-                    # Ловим ошибки от ЮKassa (например, not_found)
                     logging.error(f"Error checking payment {payment_id} for order {order_id}: {e}")
         except Exception as e:
             logging.error(f"Error in payment status checker: {e}")
 
         await asyncio.sleep(30)
 
-# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима) ======
+# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ ======
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_order(call: CallbackQuery):
     await call.answer()
@@ -827,10 +835,8 @@ async def main():
     for admin_id in STATIC_ADMINS:
         await database.add_admin(admin_id)
 
-    # Запускаем фоновую задачу для проверки статусов платежей
     asyncio.create_task(check_payments_status())
 
-    # Запускаем polling бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
