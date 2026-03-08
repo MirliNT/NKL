@@ -20,8 +20,6 @@ import database
 
 # Импорт библиотеки ЮKassa
 from yookassa import Configuration, Payment
-from yookassa.domain.notification import WebhookNotificationEventType
-from yookassa.domain.common import SecurityHelper
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
@@ -339,6 +337,10 @@ async def get_link(message: Message, state: FSMContext):
             }
         }, idempotence_key)
 
+        # Логируем весь объект платежа и его ID
+        logging.info(f"Payment object: {payment}")
+        logging.info(f"Payment ID from YooKassa: {payment.id}")
+
         # Сохраняем ID платежа в БД
         if not payment.id:
             logging.error("Payment created without ID!")
@@ -367,7 +369,7 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Не удалось создать платёж. Попробуйте позже.")
         await state.clear()
 
-# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ (POLLING) ======
+# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ ======
 async def check_payments_status():
     """Каждые 30 секунд проверяет статусы всех платежей со статусом PENDING."""
     while True:
@@ -377,7 +379,7 @@ async def check_payments_status():
                 logging.info(f"Checking {len(pending_orders)} pending orders...")
             for order in pending_orders:
                 order_id = order[0]
-                payment_id = order[8]  # индекс 8 — payment_id (в соответствии с порядком полей в create_order)
+                payment_id = order[8]  # индекс 8 — payment_id
                 if not payment_id:
                     logging.warning(f"Order {order_id} has no payment_id, skipping.")
                     continue
@@ -423,7 +425,7 @@ async def check_payments_status():
 
         await asyncio.sleep(30)
 
-# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима, если потребуется) ======
+# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ (для ручного режима) ======
 @dp.callback_query(F.data.startswith("accept_"))
 async def accept_order(call: CallbackQuery):
     await call.answer()
