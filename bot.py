@@ -19,17 +19,20 @@ from config import (
     HELEKET_API_KEY, HELEKET_API_URL, HELEKET_RETURN_URL
 )
 import database
+
+# Импорт библиотеки ЮKassa
 from yookassa import Configuration, Payment
 
-Configuration.account_id = YOOKASSA_SHOP_ID
-Configuration.secret_key = YOOKASSA_SECRET_KEY
-
-# Импорт библиотеки aiosqlite для прямых запросов (используется в /fixdb)
+# Импорт aiosqlite для диагностики
 import aiosqlite
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+
+# Настройка ЮKassa
+Configuration.account_id = YOOKASSA_SHOP_ID
+Configuration.secret_key = YOOKASSA_SECRET_KEY
 
 # ====== Состояния ======
 class OrderState(StatesGroup):
@@ -37,7 +40,7 @@ class OrderState(StatesGroup):
     waiting_link = State()
 
 class PaymentMethodChoice(StatesGroup):
-    choosing_method = State()  # выбор способа оплаты
+    choosing_method = State()
 
 class CalcState(StatesGroup):
     waiting_quantity = State()
@@ -292,7 +295,7 @@ async def get_quantity(message: Message, state: FSMContext):
     await message.answer(f"💰 Стоимость: {price} руб.\n\nОтправьте ссылку:")
     await state.set_state(OrderState.waiting_link)
 
-# ====== ОБРАБОТКА ССЫЛКИ (теперь сохраняем заказ и предлагаем выбор метода) ======
+# ====== ОБРАБОТКА ССЫЛКИ (сохраняем заказ без payment_id) ======
 @dp.message(OrderState.waiting_link)
 async def get_link(message: Message, state: FSMContext):
     if await check_ban_and_terms(message.from_user.id):
@@ -306,7 +309,6 @@ async def get_link(message: Message, state: FSMContext):
     quantity = data['quantity']
     price = data['price']
 
-    # Сохраняем заказ в БД со статусом PENDING (без payment_id и payment_method)
     try:
         await database.create_order(
             order_id=order_id,
@@ -322,7 +324,7 @@ async def get_link(message: Message, state: FSMContext):
         await message.answer("Ошибка при создании заказа. Попробуйте позже.")
         return await state.clear()
 
-    # Сохраняем order_id в state для дальнейшего использования
+    # Сохраняем order_id в state
     await state.update_data(order_id=order_id)
 
     # Предлагаем выбрать способ оплаты
@@ -349,19 +351,17 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    # Получаем данные заказа из БД (на всякий случай)
     order = await database.get_order(order_id)
     if not order:
         await call.message.answer("Ошибка: заказ не найден в базе.")
         await state.clear()
         return
 
-    price = order[4]  # индекс price
+    price = order[4]
     service = order[2]
     quantity = order[3]
     user_id = call.from_user.id
 
-    # Создание платежа в ЮKassa
     try:
         idempotence_key = str(uuid.uuid4())
         payment = Payment.create({
@@ -388,7 +388,9 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
         await database.update_order_payment_id(order_id, payment_id)
         await database.update_order_payment_method(order_id, "yookassa")
 
-        # Формируем сообщение с кнопкой оплаты
+        # Логируем для проверки
+        logging.info(f"Order {order_id} updated with payment_id={payment_id}, method=yookassa")
+
         kb = InlineKeyboardBuilder()
         kb.button(text="💳 Оплатить картой", url=confirmation_url)
         kb.adjust(1)
@@ -409,18 +411,18 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
 
 # ====== ФУНКЦИЯ СОЗДАНИЯ ПЛАТЕЖА HELEKET ======
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
-    auth = base64.b64encode(f"{HELEKET_API_KEY}:".encode()).decode().strip()  # если нужен Basic Auth без пароля
+    auth = base64.b64encode(f"{HELEKET_API_KEY}:".encode()).decode().strip()
     headers = {
         "Authorization": f"Basic {auth}",
         "Content-Type": "application/json"
     }
     data = {
         "amount": f"{amount:.2f}",
-        "currency": "RUB",  # можно указать RUB, а Heleket сам сконвертирует в крипту
+        "currency": "RUB",
         "order_id": order_id,
         "description": description,
-        "callback_url": "https://your-server.com/heleket-webhook",  # замените на реальный URL вебхука
-        "success_url": YOOKASSA_RETURN_URL  # можно использовать тот же return_url
+        "callback_url": "https://your-server.com/heleket-webhook",  # замените на ваш URL
+        "success_url": YOOKASSA_RETURN_URL
     }
 
     async with aiohttp.ClientSession() as session:
@@ -462,14 +464,15 @@ async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
         )
 
         payment_id = payment_data.get('id')
-        payment_url = payment_data.get('payment_url')  # предположим, что так
+        payment_url = payment_data.get('payment_url')
 
         if not payment_id or not payment_url:
             raise Exception("Missing payment_id or payment_url in Heleket response")
 
-        # Обновляем запись заказа
         await database.update_order_payment_id(order_id, payment_id)
         await database.update_order_payment_method(order_id, "heleket")
+
+        logging.info(f"Order {order_id} updated with payment_id={payment_id}, method=heleket")
 
         kb = InlineKeyboardBuilder()
         kb.button(text="₿ Оплатить криптовалютой", url=payment_url)
@@ -489,7 +492,17 @@ async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
         await call.message.answer("Не удалось создать платёж через Heleket. Попробуйте позже.")
         await state.clear()
 
-# ====== ФУНКЦИЯ ПРОВЕРКИ СТАТУСА ПЛАТЕЖА HELEKET ======
+# ====== ФУНКЦИИ ПРОВЕРКИ СТАТУСА ПЛАТЕЖЕЙ ======
+async def check_yookassa_payment(payment_id: str):
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            return data.get('status')
+
 async def check_heleket_payment(payment_id: str):
     auth = base64.b64encode(f"{HELEKET_API_KEY}:".encode()).decode().strip()
     headers = {"Authorization": f"Basic {auth}"}
@@ -498,9 +511,9 @@ async def check_heleket_payment(payment_id: str):
             if resp.status != 200:
                 return None
             data = await resp.json()
-            return data.get('status')  # предположим, что статус в поле 'status'
+            return data.get('status')
 
-# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ПЛАТЕЖЕЙ (обновлённая) ======
+# ====== ФОНОВАЯ ЗАДАЧА ДЛЯ ПРОВЕРКИ СТАТУСОВ ======
 async def check_payments_status():
     while True:
         try:
@@ -509,10 +522,14 @@ async def check_payments_status():
                 logging.info(f"Checking {len(pending_orders)} pending orders...")
             for order in pending_orders:
                 order_id = order[0]
-                payment_id = order[8]  # payment_id на 8-й позиции
-                payment_method = order[9] if len(order) > 9 else None  # payment_method на 9-й позиции (если есть)
+                payment_id = order[8]   # payment_id
+                payment_method = order[10] if len(order) > 10 else None  # payment_method
+
                 if not payment_id:
                     logging.warning(f"Order {order_id} has no payment_id, skipping.")
+                    continue
+                if not payment_method:
+                    logging.warning(f"Order {order_id} has payment_id but no payment_method, skipping.")
                     continue
 
                 logging.info(f"Checking order {order_id}, payment_method: {payment_method}, payment_id: {payment_id}")
@@ -530,7 +547,7 @@ async def check_payments_status():
                         logging.warning(f"Payment {payment_id} not found or error")
                         continue
                     logging.info(f"Payment {payment_id} status: {status}")
-                    if status == 'succeeded':  # для Heleket нужно уточнить точное значение статуса
+                    if status == 'succeeded':
                         await database.update_order_status(order_id, "PAID", f"Оплачено через {payment_method} (авто)")
 
                         user_id = order[1]
@@ -562,18 +579,7 @@ async def check_payments_status():
 
         await asyncio.sleep(30)
 
-# ====== ФУНКЦИЯ ПРОВЕРКИ СТАТУСА ЮKASSA (та же, что и раньше) ======
-async def check_yookassa_payment(payment_id: str):
-    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
-    headers = {"Authorization": f"Basic {auth}"}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers) as resp:
-            if resp.status != 200:
-                return None
-            data = await resp.json()
-            return data.get('status')
-
-# ====== ДИАГНОСТИЧЕСКАЯ КОМАНДА ДЛЯ АДМИНОВ ======
+# ====== ДИАГНОСТИЧЕСКАЯ КОМАНДА ======
 @dp.message(Command("fixdb"))
 async def fixdb_command(message: Message):
     if not await database.is_admin(message.from_user.id):
