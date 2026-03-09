@@ -534,19 +534,27 @@ def generate_heleket_sign(data: dict, api_key: str) -> str:
     return hashlib.md5((base64_data + api_key).encode()).hexdigest()
 
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
-    """Создаёт платёж через Heleket."""
+    """Создаёт платёж через Heleket с подробным логированием."""
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "USD",  # Валюта вашего магазина, можно RUB, если поддерживается
+        "currency": "USD",  # Попробуйте также "RUB", если поддерживается
         "order_id": order_id,
-        "url_callback": "https://your-server.com/heleket-webhook",  # Замените на реальный URL вебхука, если используете
         "url_success": HELEKET_RETURN_URL,
-        # Дополнительные параметры при необходимости:
-        # "network": "tron",  # если хотите зафиксировать сеть
-        # "to_currency": "USDT",
-        # "lifetime": 3600,
+        # "url_callback": "https://your-server.com/heleket-webhook",  # пока закомментируем
     }
-    sign = generate_heleket_sign(payload, HELEKET_API_KEY)
+    # Логируем исходные данные
+    logging.info(f"Heleket payload: {payload}")
+
+    # Генерируем подпись
+    json_data = json.dumps(payload, separators=(',', ':'))
+    logging.info(f"Heleket json_data: {json_data}")
+
+    base64_data = base64.b64encode(json_data.encode()).decode()
+    logging.info(f"Heleket base64_data: {base64_data}")
+
+    sign = hashlib.md5((base64_data + HELEKET_API_KEY).encode()).hexdigest()
+    logging.info(f"Heleket sign: {sign}")
+
     headers = {
         "merchant": HELEKET_MERCHANT_ID,
         "sign": sign,
@@ -555,8 +563,12 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
 
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, json=payload) as resp:
-            response_json = await resp.json()
-            logging.info(f"Heleket response: {response_json}")
+            response_text = await resp.text()
+            logging.info(f"Heleket response status: {resp.status}")
+            logging.info(f"Heleket response body: {response_text}")
+            if resp.status != 200:
+                raise Exception(f"Heleket HTTP error {resp.status}: {response_text}")
+            response_json = json.loads(response_text)
             if response_json.get('state') != 0:
                 raise Exception(f"Heleket error: {response_json}")
             return response_json['result']
