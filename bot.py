@@ -534,22 +534,24 @@ def generate_heleket_sign(data: dict, api_key: str) -> str:
     return hashlib.md5((base64_data + api_key).encode()).hexdigest()
 
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
-    """Создаёт платёж через Heleket. (Исправленная версия без url_success)"""
+    """Создаёт платёж через Heleket (исправленная версия с ручной сериализацией)."""
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "USD",  # Убедитесь, что эта валюта подходит для вашего магазина
+        "currency": "USD",
         "order_id": order_id,
-        # "url_success": HELEKET_RETURN_URL,  # <--- Эту строку нужно удалить или закомментировать
     }
-    # Сортируем ключи для стабильности подписи (хорошая практика)
+    # Сортируем ключи для стабильности (в алфавитном порядке)
     sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
-
+    # Генерируем JSON-строку без пробелов (точно как в curl)
     json_data = json.dumps(sorted_payload, separators=(',', ':'))
+    logging.info(f"Heleket request body: {json_data}")
+
+    # Вычисляем подпись
     base64_data = base64.b64encode(json_data.encode()).decode()
-    # Убедитесь, что в ключе нет лишних пробелов
     api_key = HELEKET_API_KEY.strip()
     merchant_id = HELEKET_MERCHANT_ID.strip()
     sign = hashlib.md5((base64_data + api_key).encode()).hexdigest()
+    logging.info(f"Heleket sign: {sign}")
 
     headers = {
         "merchant": merchant_id,
@@ -558,8 +560,12 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, json=sorted_payload) as resp:
+        # ВАЖНО: передаём data=json_data, а не json=sorted_payload,
+        # чтобы избежать перекодировки с пробелами.
+        async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, data=json_data) as resp:
             response_text = await resp.text()
+            logging.info(f"Heleket response status: {resp.status}")
+            logging.info(f"Heleket response body: {response_text}")
             if resp.status != 200:
                 raise Exception(f"Heleket HTTP error {resp.status}: {response_text}")
             response_json = json.loads(response_text)
