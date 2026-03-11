@@ -262,14 +262,14 @@ async def choose_subscribers(call: CallbackQuery, state: FSMContext):
     if await check_ban_and_terms(call.from_user.id):
         return
     await state.update_data(service="subscribers")
-    
+
     kb = InlineKeyboardBuilder()
     for key, name in SUBSCRIBER_DURATIONS.items():
         price = SUBSCRIBER_PRICES[key]
         kb.button(text=f"{name} - {price}₽ за 100 чел", callback_data=f"sub_dur_{key}")
     kb.button(text="◀️ Назад к выбору услуги", callback_data="order")
     kb.adjust(2)
-    
+
     await call.message.edit_text(
         "Выберите длительность подписки (минимальный заказ — 100 человек):",
         reply_markup=kb.as_markup()
@@ -291,13 +291,13 @@ async def choose_reactions(call: CallbackQuery, state: FSMContext):
     if await check_ban_and_terms(call.from_user.id):
         return
     await state.update_data(service="reactions")
-    
+
     kb = InlineKeyboardBuilder()
     for key, name in REACTION_TYPES.items():
         kb.button(text=name, callback_data=f"react_type_{key}")
     kb.button(text="◀️ Назад к выбору услуги", callback_data="order")
     kb.adjust(2)
-    
+
     await call.message.edit_text(
         "Выберите тип реакций:",
         reply_markup=kb.as_markup()
@@ -326,7 +326,7 @@ async def process_reaction_type(call: CallbackQuery, state: FSMContext):
     type_key = call.data.split("_")[2]
     type_name = REACTION_TYPES[type_key]
     await state.update_data(reaction_type_key=type_key, reaction_type_name=type_name)
-    
+
     if type_key == "emoji_list":
         kb = InlineKeyboardBuilder()
         for emoji in EMOJI_LIST:
@@ -357,7 +357,7 @@ async def get_quantity(message: Message, state: FSMContext):
         return await state.clear()
     if not message.text or not message.text.isdigit():
         return await message.answer("Введите число!")
-    
+
     quantity = int(message.text)
     data = await state.get_data()
     service = data["service"]
@@ -375,7 +375,7 @@ async def get_quantity(message: Message, state: FSMContext):
         price = quantity * PRICES[service]
     else:
         return await message.answer("Ошибка: неизвестная услуга.")
-    
+
     await state.update_data(quantity=quantity, price=price)
     await message.answer(f"💰 Стоимость: {price:.2f} руб.\n\nОтправьте ссылку:")
     await state.set_state(OrderState.waiting_link)
@@ -527,26 +527,19 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
         await state.clear()
 
 # ====== ФУНКЦИИ ДЛЯ HELEKET ======
-def generate_heleket_sign(data: dict, api_key: str) -> str:
-    """Генерирует подпись для запроса к Heleket API."""
-    json_data = json.dumps(data, separators=(',', ':'))
-    base64_data = base64.b64encode(json_data.encode()).decode()
-    return hashlib.md5((base64_data + api_key).encode()).hexdigest()
-
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
-    """Создаёт платёж через Heleket (исправленная версия с ручной сериализацией)."""
+    """Создаёт платёж в USDT на сумму, равную amount (рубли -> USDT 1:1)."""
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "RUB",
+        "currency": "USDT",          # валюта счёта – USDT
         "order_id": order_id,
+        # "network": "tron",          # при необходимости укажите сеть
     }
-    # Сортируем ключи для стабильности (в алфавитном порядке)
+    # Сортируем ключи для стабильной подписи
     sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
-    # Генерируем JSON-строку без пробелов (точно как в curl)
     json_data = json.dumps(sorted_payload, separators=(',', ':'))
     logging.info(f"Heleket request body: {json_data}")
 
-    # Вычисляем подпись
     base64_data = base64.b64encode(json_data.encode()).decode()
     api_key = HELEKET_API_KEY.strip()
     merchant_id = HELEKET_MERCHANT_ID.strip()
@@ -560,8 +553,7 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
     }
 
     async with aiohttp.ClientSession() as session:
-        # ВАЖНО: передаём data=json_data, а не json=sorted_payload,
-        # чтобы избежать перекодировки с пробелами.
+        # Передаём data=json_data, а не json=... чтобы избежать лишних пробелов
         async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, data=json_data) as resp:
             response_text = await resp.text()
             logging.info(f"Heleket response status: {resp.status}")
@@ -573,17 +565,10 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
                 raise Exception(f"Heleket error: {response_json}")
             return response_json['result']
 
-async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
-    """Создаёт платёж в USDT на сумму, равную amount (рубли -> USDT 1:1)."""
-    payload = {
-        "amount": f"{amount:.2f}",
-        "currency": "RUB",          # <-- меняем USD на USDT
-        "order_id": order_id,
-        # При необходимости можно указать сеть, например "network": "tron"
-    }
-    # Сортируем ключи для стабильной подписи
-    sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
-    json_data = json.dumps(sorted_payload, separators=(',', ':'))
+async def check_heleket_payment(payment_uuid: str):
+    """Проверяет статус платежа Heleket по его UUID."""
+    payload = {"uuid": payment_uuid}
+    json_data = json.dumps(payload, separators=(',', ':'))
     base64_data = base64.b64encode(json_data.encode()).decode()
     api_key = HELEKET_API_KEY.strip()
     merchant_id = HELEKET_MERCHANT_ID.strip()
@@ -596,14 +581,15 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, data=json_data) as resp:
-            response_text = await resp.text()
+        async with session.post(f"{HELEKET_API_URL}/payment/info", headers=headers, data=json_data) as resp:
             if resp.status != 200:
-                raise Exception(f"Heleket HTTP error {resp.status}: {response_text}")
-            response_json = json.loads(response_text)
+                logging.error(f"Heleket payment info error: HTTP {resp.status}")
+                return None
+            response_json = await resp.json()
             if response_json.get('state') != 0:
-                raise Exception(f"Heleket error: {response_json}")
-            return response_json['result']
+                logging.error(f"Heleket payment info error: {response_json}")
+                return None
+            return response_json['result'].get('payment_status')
 
 @dp.callback_query(F.data == "pay_heleket")
 async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
@@ -650,7 +636,7 @@ async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
 
         await call.message.edit_text(
             f"✅ Заказ №{order_id} готов к оплате через Heleket!\n\n"
-            f"{description}\nСумма: {price:.2f} руб.\n\n"
+            f"{description}\nСумма: {price:.2f} руб. (эквивалент {price:.2f} USDT)\n\n"
             f"Для оплаты перейдите по ссылке ниже. После успешной оплаты заказ будет подтверждён автоматически.",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
@@ -672,8 +658,6 @@ async def check_yookassa_payment(payment_id: str):
                 return None
             data = await resp.json()
             return data.get('status')
-
-# check_heleket_payment уже определена выше
 
 async def check_payments_status():
     """Фоновая задача для проверки статусов всех ожидающих платежей."""
@@ -709,7 +693,7 @@ async def check_payments_status():
                         logging.warning(f"Payment {payment_id} not found or error")
                         continue
                     logging.info(f"Payment {payment_id} status: {status}")
-                    if status == 'succeeded' or status == 'paid':
+                    if status in ('succeeded', 'paid'):
                         await database.update_order_status(order_id, "PAID", f"Оплачено через {payment_method} (авто)")
 
                         user_id = order[1]
