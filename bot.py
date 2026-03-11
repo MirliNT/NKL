@@ -531,7 +531,7 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
     """Создаёт платёж в USDT на сумму, равную amount (рубли -> USDT 1:1)."""
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "USDT",          # валюта счёта – USDT
+        "currency": "RUB",          # валюта счёта – USDT
         "order_id": order_id,
         # "network": "tron",          # при необходимости укажите сеть
     }
