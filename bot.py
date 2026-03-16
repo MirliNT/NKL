@@ -39,14 +39,14 @@ class SubscribersDuration(StatesGroup):
 class ReactionsType(StatesGroup):
     waiting_reaction_type = State()
     waiting_reaction_emoji = State()
-    waiting_emoji_page = State()  # для пагинации эмодзи
+    waiting_emoji_page = State()
 
 class PaymentMethodChoice(StatesGroup):
     choosing_method = State()
 
 class CalcState(StatesGroup):
     waiting_quantity = State()
-    waiting_reaction_type = State()  # для калькулятора реакций
+    waiting_reaction_type = State()
 
 class DeclineReason(StatesGroup):
     waiting_reason = State()
@@ -58,18 +58,15 @@ class PaymentState(StatesGroup):
     waiting_for_payment = State()
 
 # ====== Цены и параметры ======
-# Цены за единицу для просмотров и реакций (будут переопределены для типов реакций)
-VIEWS_PRICE = 1.0  # 1 руб за 1 просмотр
+VIEWS_PRICE = 1.0
 
-# Цены за единицу для разных типов реакций
 REACTION_PRICES = {
-    "custom": 0.01,      # 1 руб за 100
-    "positive": 1/150,   # 1 руб за 150 (0.006666...)
+    "custom": 0.01,
+    "positive": 1/150,
     "negative": 1/150,
     "emoji_list": 0.01
 }
 
-# Цены для подписчиков за 100 человек в зависимости от длительности (остаются как есть)
 SUBSCRIBER_PRICES = {
     "day": 1.0,
     "3days": 2.5,
@@ -79,13 +76,12 @@ SUBSCRIBER_PRICES = {
     "forever": 10.0
 }
 
-# Минимальные значения для подписчиков
 SUBSCRIBER_MINIMUMS = {
     "day": 100,
     "3days": 40,
     "7days": 35,
     "30days": 20,
-    "90days": 15,    # в запросе было "40 человек минимум 15" – исправлено на 15
+    "90days": 15,
     "forever": 10
 }
 
@@ -105,7 +101,6 @@ REACTION_TYPES = {
     "emoji_list": "Эмодзи из списка"
 }
 
-# Две страницы эмодзи
 EMOJI_PAGE_1 = ["👍", "🤡", "💩", "❤️", "🤝", "🖕", "👀", "🍌"]
 EMOJI_PAGE_2 = ["👻", "🕊", "🌲", "🗿", "🍾", "👌", "🤬"]
 EMOJI_PAGES = [EMOJI_PAGE_1, EMOJI_PAGE_2]
@@ -144,7 +139,7 @@ async def accept_terms(call: CallbackQuery):
     await call.message.edit_text("✅ Вы приняли договор оферты и политику конфиденциальности. Теперь вы можете пользоваться ботом.")
     await show_main_menu(call.from_user.id)
 
-# ====== ГЛАВНОЕ МЕНЮ (с кастомными эмодзи) ======
+# ====== ГЛАВНОЕ МЕНЮ ======
 async def show_main_menu(chat_id: int):
     keyboard = [
         [InlineKeyboardButton(text="🛒 Заказать накрутку", callback_data="order")],
@@ -168,7 +163,7 @@ async def show_main_menu(chat_id: int):
 <b>Приветствую!</b> <tg-emoji emoji-id="5877700484453634587">✈️</tg-emoji>
 <b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
 
-</b><blockquote><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji> <b>Тех.поддержка: </b>@support_username<b>
+</b><blockquote><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji> <b>Тех.поддержка: </b>@nBoost_supports<b>
 </b><tg-emoji emoji-id="5870995486453796729">📊</tg-emoji> <b>Наш канал: </b>@channel_username</blockquote>
 <a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
     """
@@ -276,7 +271,6 @@ async def order_menu(call: CallbackQuery):
                     disable_web_page_preview=True
                 )
 
-# ====== ВЫБОР ОСНОВНОЙ УСЛУГИ ======
 @dp.callback_query(F.data == "subscribers")
 async def choose_subscribers(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -288,7 +282,6 @@ async def choose_subscribers(call: CallbackQuery, state: FSMContext):
     for key, name in SUBSCRIBER_DURATIONS.items():
         price = SUBSCRIBER_PRICES[key]
         min_q = SUBSCRIBER_MINIMUMS[key]
-        # Используем обычный текст, без кастомных эмодзи для простоты, но можно добавить
         kb.button(text=f"{name} - {price}₽ за 100 чел (мин {min_q})", callback_data=f"sub_dur_{key}")
     kb.button(text="◀️ Назад к выбору услуги", callback_data="order")
     kb.adjust(2)
@@ -318,7 +311,6 @@ async def choose_reactions(call: CallbackQuery, state: FSMContext):
 
     kb = InlineKeyboardBuilder()
     for key, name in REACTION_TYPES.items():
-        # В тексте кнопки покажем цену за единицу (округлённо)
         price_per_unit = REACTION_PRICES[key]
         if key in ("custom", "emoji_list"):
             price_text = f"1₽ за 100"
@@ -358,7 +350,6 @@ async def process_reaction_type(call: CallbackQuery, state: FSMContext):
     type_key = call.data.split("_")[2]
     logging.info(f"process_reaction_type received type_key: {type_key}")
 
-    # Если пришёл устаревший ключ "emoji", преобразуем его в "emoji_list"
     if type_key == "emoji":
         type_key = "emoji_list"
         logging.info("Converted old key 'emoji' to 'emoji_list'")
@@ -366,7 +357,6 @@ async def process_reaction_type(call: CallbackQuery, state: FSMContext):
     if type_key not in REACTION_TYPES:
         logging.error(f"Unknown reaction type key: {type_key}")
         await call.message.answer("❌ Неизвестный тип реакции. Пожалуйста, выберите снова.")
-        # Возвращаем пользователя к выбору типа
         kb = InlineKeyboardBuilder()
         for key, name in REACTION_TYPES.items():
             price_per_unit = REACTION_PRICES[key]
@@ -387,25 +377,20 @@ async def process_reaction_type(call: CallbackQuery, state: FSMContext):
     await state.update_data(reaction_type_key=type_key, reaction_type_name=type_name)
 
     if type_key == "emoji_list":
-        # Показываем первую страницу эмодзи
         await show_emoji_page(call.message, state, page=0)
         await state.set_state(ReactionsType.waiting_reaction_emoji)
     else:
-        # Для других типов сразу запрашиваем количество
         await call.message.edit_text("Введите количество реакций (минимум 1):")
         await state.set_state(OrderState.waiting_quantity)
 
 async def show_emoji_page(message: Message, state: FSMContext, page: int):
-    """Отображает страницу эмодзи с кнопками навигации."""
     data = await state.get_data()
     current_page = data.get('emoji_page', page)
     emoji_list = EMOJI_PAGES[current_page]
 
     kb = InlineKeyboardBuilder()
-    # Кнопки эмодзи
     for emoji in emoji_list:
         kb.button(text=emoji, callback_data=f"react_emoji_{emoji}")
-    # Кнопки навигации
     nav_row = []
     if current_page > 0:
         nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="emoji_prev"))
@@ -414,7 +399,7 @@ async def show_emoji_page(message: Message, state: FSMContext, page: int):
     if nav_row:
         kb.row(*nav_row)
     kb.button(text="◀️ Назад к типам реакций", callback_data="reactions")
-    kb.adjust(3)  # по 3 эмодзи в ряд
+    kb.adjust(3)
 
     await message.edit_text(
         "Выберите эмодзи (страница {}):".format(current_page + 1),
@@ -447,7 +432,7 @@ async def process_reaction_emoji(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text("Введите количество реакций (минимум 1):")
     await state.set_state(OrderState.waiting_quantity)
 
-# ====== ВВОД КОЛИЧЕСТВА (с проверкой минимума) ======
+# ====== ВВОД КОЛИЧЕСТВА ======
 @dp.message(OrderState.waiting_quantity)
 async def get_quantity(message: Message, state: FSMContext):
     if await check_ban_and_terms(message.from_user.id):
@@ -460,12 +445,9 @@ async def get_quantity(message: Message, state: FSMContext):
     service = data["service"]
 
     if service == "subscribers":
-        min_q = data.get("min_quantity", 100)  # на всякий случай
+        min_q = data.get("min_quantity", 100)
         if quantity < min_q:
             return await message.answer(f"Минимальное количество для выбранной длительности — {min_q}.")
-        # Проверка кратности 100 не требуется, так как цена за 100 человек, но можно разрешить любое количество, цена будет пропорциональна
-        # Но по условию "цена за 100 человек", значит можно заказать любое количество, цена = (quantity / 100) * price_per_100
-        # Оставим как есть, без проверки кратности.
         price_per_100 = data.get("price_per_100")
         price = (quantity / 100) * price_per_100
     elif service in ("views", "reactions"):
@@ -473,7 +455,7 @@ async def get_quantity(message: Message, state: FSMContext):
             return await message.answer("Минимальное количество — 1.")
         if service == "views":
             price = quantity * VIEWS_PRICE
-        else:  # reactions
+        else:
             reaction_type = data.get("reaction_type_key")
             if reaction_type is None:
                 return await message.answer("Ошибка: не выбран тип реакции.")
@@ -500,16 +482,15 @@ async def get_link(message: Message, state: FSMContext):
     quantity = data['quantity']
     price = data['price']
 
-    # Формируем описание заказа
+    # Формируем описание для комментария
     if service == "subscribers":
-        description = f"Подписчики, длительность: {data['subtype']}, кол-во: {quantity}"
+        comment = f"Подписчики, длительность: {data['subtype']}"
     elif service == "reactions":
-        base = f"Реакции, тип: {data['reaction_type_name']}"
+        comment = f"Реакции, тип: {data['reaction_type_name']}"
         if data.get('reaction_type_key') == 'emoji_list' and 'selected_emoji' in data:
-            base += f", эмодзи: {data['selected_emoji']}"
-        description = f"{base}, кол-во: {quantity}"
+            comment += f", эмодзи: {data['selected_emoji']}"
     else:  # views
-        description = f"Просмотры, кол-во: {quantity}"
+        comment = "Просмотры"
 
     try:
         await database.create_order(
@@ -519,14 +500,15 @@ async def get_link(message: Message, state: FSMContext):
             quantity=quantity,
             price=price,
             link=link,
-            status="PENDING"
+            status="PENDING",
+            comment=comment
         )
     except Exception as e:
         logging.error(f"DB error: {e}")
         await message.answer("Ошибка при создании заказа. Попробуйте позже.")
         return await state.clear()
 
-    await state.update_data(order_id=order_id, description=description)
+    await state.update_data(order_id=order_id, description=comment)
 
     # Выбор способа оплаты
     kb = InlineKeyboardBuilder()
@@ -536,12 +518,12 @@ async def get_link(message: Message, state: FSMContext):
     kb.adjust(1)
 
     await message.answer(
-        f"✅ Заказ предварительно сохранён.\n{description}\nСумма: {price:.2f} руб.\n\nТеперь выберите способ оплаты:",
+        f"✅ Заказ предварительно сохранён.\n{comment}\nКоличество: {quantity}\nСумма: {price:.2f} руб.\n\nТеперь выберите способ оплаты:",
         reply_markup=kb.as_markup()
     )
     await state.set_state(PaymentMethodChoice.choosing_method)
 
-# ====== ФУНКЦИИ ДЛЯ ЮKASSA (без изменений, остаются как есть) ======
+# ====== ЮKassa ======
 async def create_yookassa_payment(amount: float, description: str, order_id: str, user_id: int):
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
     headers = {
@@ -614,14 +596,16 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
 
         logging.info(f"Order {order_id} updated with payment_id={payment_id}, method=yookassa")
 
+        # Кнопки: оплатить и проверить
         kb = InlineKeyboardBuilder()
         kb.button(text="💳 Оплатить картой", url=confirmation_url)
+        kb.button(text="✅ Проверить оплату", callback_data=f"check_payment_{order_id}")
         kb.adjust(1)
 
         await call.message.edit_text(
             f"✅ Заказ №{order_id} готов к оплате через ЮKassa!\n\n"
             f"{description}\nСумма: {price:.2f} руб.\n\n"
-            f"Для оплаты перейдите по ссылке ниже. После успешной оплаты заказ будет подтверждён автоматически.",
+            f"Для оплаты перейдите по ссылке ниже. После оплаты нажмите «Проверить оплату».",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
         )
@@ -632,7 +616,7 @@ async def pay_with_yookassa(call: CallbackQuery, state: FSMContext):
         await call.message.answer("Не удалось создать платёж. Попробуйте позже.")
         await state.clear()
 
-# ====== ФУНКЦИИ ДЛЯ HELEKET (без изменений) ======
+# ====== Heleket ======
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
     payload = {
         "amount": f"{amount:.2f}",
@@ -733,12 +717,13 @@ async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
 
         kb = InlineKeyboardBuilder()
         kb.button(text="₿ Оплатить криптовалютой", url=payment_url)
+        kb.button(text="✅ Проверить оплату", callback_data=f"check_payment_{order_id}")
         kb.adjust(1)
 
         await call.message.edit_text(
             f"✅ Заказ №{order_id} готов к оплате через Heleket!\n\n"
             f"{description}\nСумма: {price:.2f} руб. (эквивалент {price:.2f} USDT)\n\n"
-            f"Для оплаты перейдите по ссылке ниже. После успешной оплаты заказ будет подтверждён автоматически.",
+            f"Для оплаты перейдите по ссылке ниже. После оплаты нажмите «Проверить оплату».",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
         )
@@ -749,7 +734,7 @@ async def pay_with_heleket(call: CallbackQuery, state: FSMContext):
         await call.message.answer("Не удалось создать платёж через Heleket. Попробуйте позже.")
         await state.clear()
 
-# ====== ФУНКЦИИ ПРОВЕРКИ СТАТУСА ПЛАТЕЖЕЙ ======
+# ====== ПРОВЕРКА ОПЛАТЫ (общий обработчик) ======
 async def check_yookassa_payment(payment_id: str):
     auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
     headers = {"Authorization": f"Basic {auth}"}
@@ -760,70 +745,114 @@ async def check_yookassa_payment(payment_id: str):
             data = await resp.json()
             return data.get('status')
 
-async def check_payments_status():
-    while True:
-        try:
-            pending_orders = await database.get_pending_orders()
-            if pending_orders:
-                logging.info(f"Checking {len(pending_orders)} pending orders...")
-            for order in pending_orders:
-                order_id = order[0]
-                payment_id = order[8]
-                payment_method = order[10] if len(order) > 10 else None
+@dp.callback_query(F.data.startswith("check_payment_"))
+async def check_payment_callback(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    order_id = call.data.split("_")[2]
+    order = await database.get_order(order_id)
+    if not order:
+        await call.message.answer("Заказ не найден.")
+        return
 
-                if not payment_id:
-                    logging.warning(f"Order {order_id} has no payment_id, skipping.")
-                    continue
-                if not payment_method:
-                    logging.warning(f"Order {order_id} has payment_id but no payment_method, skipping.")
-                    continue
+    # Проверяем статус заказа
+    if order[6] in ("PAID", "ACCEPTED", "DECLINED"):
+        await call.message.answer("Этот заказ уже обработан.")
+        return
 
-                logging.info(f"Checking order {order_id}, payment_method: {payment_method}, payment_id: {payment_id}")
+    payment_method = order[10]
+    payment_id = order[8]
+    if not payment_id:
+        await call.message.answer("Нет информации о платеже.")
+        return
 
+    # Получаем статус платежа
+    try:
+        if payment_method == 'yookassa':
+            status = await check_yookassa_payment(payment_id)
+            success_status = 'succeeded'
+        elif payment_method == 'heleket':
+            status = await check_heleket_payment(payment_id)
+            success_status = 'paid'
+        else:
+            await call.message.answer("Неизвестный метод оплаты.")
+            return
+
+        if status is None:
+            await call.message.answer("Не удалось получить статус платежа. Попробуйте позже.")
+            return
+
+        if status == success_status:
+            await database.update_order_status(order_id, "PAID", "Оплачено (подтверждено пользователем)")
+            await bot.send_message(order[1], f"✅ Ваш заказ №{order_id} оплачен! Мы начали выполнение.")
+            await call.message.edit_text(
+                f"✅ Оплата заказа №{order_id} подтверждена!\n"
+                f"Ваш заказ передан в работу.",
+                reply_markup=None
+            )
+            # Уведомляем админов
+            admins = await database.get_all_admins()
+            for admin in admins:
                 try:
-                    if payment_method == 'yookassa':
-                        status = await check_yookassa_payment(payment_id)
-                    elif payment_method == 'heleket':
-                        status = await check_heleket_payment(payment_id)
-                    else:
-                        logging.warning(f"Unknown payment method {payment_method} for order {order_id}")
-                        continue
+                    await bot.send_message(admin, f"💰 Подтверждена оплата заказа №{order_id} от пользователя {order[1]}.")
+                except:
+                    pass
+        else:
+            await call.message.answer(f"❌ Платёж ещё не оплачен (статус: {status}). Попробуйте позже или обратитесь в поддержку @nBoost_supports.")
+    except Exception as e:
+        logging.error(f"Error checking payment: {e}")
+        await call.message.answer("Произошла ошибка при проверке платежа.")
 
-                    if status is None:
-                        logging.warning(f"Payment {payment_id} not found or error")
-                        continue
-                    logging.info(f"Payment {payment_id} status: {status}")
-                    if status in ('succeeded', 'paid'):
-                        await database.update_order_status(order_id, "PAID", f"Оплачено через {payment_method} (авто)")
+# ====== КОМАНДА /search ======
+@dp.message(Command("search"))
+async def search_order(message: Message):
+    if not await database.is_admin(message.from_user.id) and message.from_user.id != OWNER_ID:
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /search <order_id>")
+    order_id = args[1]
+    order = await database.get_order(order_id)
+    if not order:
+        await message.answer("❌ Заказ не найден.")
+        return
 
-                        user_id = order[1]
-                        try:
-                            await bot.send_message(
-                                user_id,
-                                f"✅ Ваш заказ №{order_id} оплачен! Мы начали выполнение.",
-                                disable_web_page_preview=True
-                            )
-                            logging.info(f"User {user_id} notified about payment for order {order_id}")
-                        except Exception as e:
-                            logging.error(f"Failed to notify user {user_id}: {e}")
+    # Индексы: 0-order_id,1-user_id,2-service,3-quantity,4-price,5-link,6-status,7-comment,8-payment_id,9-payment_charge_id,10-payment_method,11-created_at
+    status_text = {
+        "NEW": "🆕 Новый",
+        "PENDING": "⏳ Ожидает оплаты",
+        "PAID": "✅ Оплачен",
+        "ACCEPTED": "📦 Принят в работу",
+        "DECLINED": "❌ Отклонён"
+    }.get(order[6], order[6])
 
-                        admins = await database.get_all_admins()
-                        for admin in admins:
-                            try:
-                                await bot.send_message(
-                                    admin,
-                                    f"💰 Автоматически подтверждена оплата заказа №{order_id} от пользователя {user_id} через {payment_method}."
-                                )
-                            except Exception as e:
-                                logging.error(f"Failed to notify admin {admin}: {e}")
+    # Формируем описание услуги
+    service_info = order[2]
+    if order[2] == "subscribers":
+        service_info = "Подписчики"
+        if order[7]:
+            service_info += f" ({order[7]})"
+    elif order[2] == "reactions":
+        service_info = "Реакции"
+        if order[7]:
+            service_info += f" ({order[7]})"
+    elif order[2] == "views":
+        service_info = "Просмотры"
 
-                        logging.info(f"Order {order_id} marked as PAID via polling")
-                except Exception as e:
-                    logging.error(f"Error checking payment {payment_id} for order {order_id}: {e}")
-        except Exception as e:
-            logging.error(f"Error in payment status checker: {e}")
+    response = f"""
+🔍 <b>Информация о заказе</b>
 
-        await asyncio.sleep(30)
+🆔 <b>Номер заказа:</b> {order[0]}
+👤 <b>Пользователь ID:</b> {order[1]}
+📦 <b>Услуга:</b> {service_info}
+🔢 <b>Количество:</b> {order[3]}
+💰 <b>Стоимость:</b> {order[4]:.2f} руб.
+🔗 <b>Ссылка:</b> {order[5]}
+📊 <b>Статус:</b> {status_text}
+💳 <b>Метод оплаты:</b> {order[10] if order[10] else 'не выбран'}
+🆔 <b>ID платежа:</b> {order[8] if order[8] else 'нет'}
+📅 <b>Создан:</b> {order[11]}
+    """
+    await message.answer(response, parse_mode="HTML", disable_web_page_preview=True)
 
 # ====== ДИАГНОСТИЧЕСКАЯ КОМАНДА ======
 @dp.message(Command("fixdb"))
@@ -851,7 +880,7 @@ async def accept_order(call: CallbackQuery):
     order = await database.get_order(order_id)
     if not order:
         return await call.message.answer("Заказ не найден.")
-    if order[6] not in ("PENDING", "NEW"):
+    if order[6] not in ("PENDING", "NEW", "PAID"):
         return await call.message.answer("Этот заказ уже обработан.")
     await database.update_order_status(order_id, "ACCEPTED", "Принят администратором")
     await call.message.edit_text(call.message.text + "\n\n✅ Заказ принят.", reply_markup=None)
@@ -870,7 +899,7 @@ async def decline_order_start(call: CallbackQuery, state: FSMContext):
     order = await database.get_order(order_id)
     if not order:
         return await call.message.answer("Заказ не найден.")
-    if order[6] not in ("PENDING", "NEW"):
+    if order[6] not in ("PENDING", "NEW", "PAID"):
         return await call.message.answer("Этот заказ уже обработан.")
     await state.update_data(order_id=order_id, order=order)
     await call.message.answer("Введите причину отклонения заказа:")
@@ -892,7 +921,7 @@ async def decline_order_reason(message: Message, state: FSMContext):
     await message.answer(f"❌ Заказ №{order_id} отклонён.")
     await state.clear()
 
-# ====== КАЛЬКУЛЯТОР (обновлён с учётом новых цен и минимумов) ======
+# ====== КАЛЬКУЛЯТОР ======
 @dp.callback_query(F.data == "calc")
 async def calc_menu(call: CallbackQuery):
     await call.answer()
@@ -1079,7 +1108,7 @@ async def support(call: CallbackQuery):
     text = """
 <b>Имеются вопросы, хотите предложить идею или у вас возникла проблема</b><tg-emoji emoji-id="5386713103213814186">❕</tg-emoji><b>
 
-</b><blockquote><b>Напишите нам в Telegram: @support_username </b><tg-emoji emoji-id="5386748326240611247">✅</tg-emoji></blockquote>
+</b><blockquote><b>Напишите нам в Telegram: @nBoost_supports </b><tg-emoji emoji-id="5386748326240611247">✅</tg-emoji></blockquote>
 
 <b>Ответ поступает в течение 24 часов</b><tg-emoji emoji-id="5386713103213814186">❕</tg-emoji>
     """
@@ -1149,7 +1178,7 @@ async def faq(call: CallbackQuery):
 5. Я заказал определённое количество накрутки, но пришло не все.
 - Да, такое бывает когда вы заказываете к примеру 5000 подписчиков, а приходит 4900, все из за того что некоторые боты не получают команду в обработку, обычных в течении часа доходят все боты.</b></blockquote><b>
 
-Основные вопросы мы обговорили, в случае если у вас другой вопрос, то обращайтесь в службу поддержки бота: @support_username</b>
+Основные вопросы мы обговорили, в случае если у вас другой вопрос, то обращайтесь в службу поддержки бота: @nBoost_supports</b>
     """
 
     async with aiohttp.ClientSession() as session:
@@ -1228,19 +1257,7 @@ async def unban_cmd(message: Message):
     await database.unban_user(user_id)
     await message.answer(f"Пользователь {user_id} разбанен.")
 
-@dp.message(Command("search"))
-async def search_order(message: Message):
-    if not await is_admin_from_db_or_config(message.from_user.id):
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        return await message.answer("Использование: /search <order_id>")
-    order_id = args[1]
-    order = await database.get_order(order_id)
-    if order:
-        await message.answer(str(order))
-    else:
-        await message.answer("Заказ не найден.")
+# search уже определён выше
 
 @dp.message(Command("addadmin"))
 async def add_admin(message: Message):
@@ -1307,8 +1324,9 @@ async def main():
     for admin_id in STATIC_ADMINS:
         await database.add_admin(admin_id)
 
-    asyncio.create_task(check_payments_status())
+    # Фоновая задача больше не нужна
+    # asyncio.create_task(check_payments_status())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()
