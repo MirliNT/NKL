@@ -8,7 +8,7 @@ import uuid
 import base64
 import hashlib
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -38,9 +38,6 @@ class SubscribersDuration(StatesGroup):
 class ReactionsType(StatesGroup):
     waiting_reaction_type = State()
     waiting_reaction_emoji = State()
-
-class PaymentMethodChoice(StatesGroup):
-    choosing_method = State()
 
 class BalanceTopup(StatesGroup):
     waiting_amount = State()
@@ -98,10 +95,8 @@ REACTION_TYPES = {
     "emoji_list": "Эмодзи из списка"
 }
 
-# Все эмодзи в одном списке
 EMOJI_LIST = ["👍", "🤡", "💩", "❤️", "🤝", "🖕", "👀", "🍌", "👻", "🕊", "🌲", "🗿", "🍾", "👌", "🤬"]
 
-# Минимальные суммы пополнения
 MIN_TOPUP_YOOKASSA = 1.0
 MIN_TOPUP_HELEKET = 5.0
 
@@ -235,9 +230,11 @@ async def balance_menu(call: CallbackQuery):
 async def topup_yookassa_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.update_data(method="yookassa")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ Отмена", callback_data="balance")
     await call.message.edit_text(
         f"Введите сумму пополнения (от {MIN_TOPUP_YOOKASSA:.2f} руб.):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Отмена", callback_data="balance")]])
+        reply_markup=kb.as_markup()
     )
     await state.set_state(BalanceTopup.waiting_amount)
 
@@ -245,9 +242,11 @@ async def topup_yookassa_start(call: CallbackQuery, state: FSMContext):
 async def topup_heleket_start(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.update_data(method="heleket")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ Отмена", callback_data="balance")
     await call.message.edit_text(
         f"Введите сумму пополнения (от {MIN_TOPUP_HELEKET:.2f} руб.):",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Отмена", callback_data="balance")]])
+        reply_markup=kb.as_markup()
     )
     await state.set_state(BalanceTopup.waiting_amount)
 
@@ -260,7 +259,6 @@ async def topup_history(call: CallbackQuery):
     else:
         text = "📜 <b>Последние пополнения:</b>\n"
         for tx in transactions:
-            # tx: id, user_id, amount, method, status, payment_id, created_at
             status_emoji = "✅" if tx[4] == "success" else "❌"
             text += f"{status_emoji} {tx[6][:10]} +{tx[2]:.2f} руб. ({tx[3]})\n"
     kb = InlineKeyboardBuilder()
@@ -279,7 +277,6 @@ async def topup_amount(message: Message, state: FSMContext):
     if method == "heleket" and amount < MIN_TOPUP_HELEKET:
         return await message.answer(f"Минимальная сумма пополнения: {MIN_TOPUP_HELEKET:.2f} руб.")
 
-    # Создаём платёж
     await state.update_data(amount=amount)
     if method == "yookassa":
         await create_yookassa_topup(message, state, amount)
@@ -298,7 +295,6 @@ async def create_yookassa_topup(message: Message, state: FSMContext, amount: flo
         confirmation_url = payment_data.get('confirmation', {}).get('confirmation_url')
         if not payment_id or not confirmation_url:
             raise Exception("Missing payment data")
-        # Сохраняем транзакцию со статусом pending
         await database.add_transaction(message.from_user.id, amount, "yookassa", "pending", payment_id)
         kb = InlineKeyboardBuilder()
         kb.button(text="💳 Оплатить картой", url=confirmation_url)
@@ -357,7 +353,6 @@ async def check_topup_callback(call: CallbackQuery):
     if tx[4] == "success":
         await call.message.answer("Этот платёж уже был обработан.")
         return
-    # Проверяем статус платежа
     if tx[3] == "yookassa":
         status = await check_yookassa_payment(payment_id)
         success_status = 'succeeded'
@@ -365,10 +360,11 @@ async def check_topup_callback(call: CallbackQuery):
         status = await check_heleket_payment(payment_id)
         success_status = 'paid'
     if status == success_status:
-        # Зачисляем баланс
         await database.update_balance(tx[1], tx[2])
-        await database.add_transaction(tx[1], tx[2], tx[3], "success", payment_id)  # обновляем статус (лучше update)
-        # Можно обновить запись, но добавим новую для простоты
+        # Обновим статус транзакции
+        async with aiosqlite.connect(database.DB_PATH) as db:
+            await db.execute('UPDATE transactions SET status = ? WHERE id = ?', ("success", tx[0]))
+            await db.commit()
         await call.message.edit_text(f"✅ Баланс пополнен на {tx[2]:.2f} руб.", reply_markup=None)
         await call.message.answer("Теперь вы можете заказывать услуги.")
     else:
@@ -539,7 +535,6 @@ async def process_reaction_type(call: CallbackQuery, state: FSMContext):
     await state.update_data(reaction_type_key=type_key, reaction_type_name=type_name)
 
     if type_key == "emoji_list":
-        # Показываем все эмодзи в одной странице
         kb = InlineKeyboardBuilder()
         for emoji in EMOJI_LIST:
             kb.button(text=emoji, callback_data=f"react_emoji_{emoji}")
@@ -596,41 +591,8 @@ async def get_quantity(message: Message, state: FSMContext):
         return await message.answer("Ошибка: неизвестная услуга.")
 
     await state.update_data(quantity=quantity, price=price)
-
-    # Проверяем баланс
-    balance = await database.get_balance(message.from_user.id)
-    if balance >= price:
-        # Списываем и создаём заказ
-        await database.update_balance(message.from_user.id, -price)
-        await create_order_and_notify(message, state, balance - price)
-    else:
-        # Недостаточно средств
-        need = price - balance
-        kb = InlineKeyboardBuilder()
-        kb.button(text="💰 Пополнить баланс", callback_data="balance")
-        kb.button(text="◀️ Вернуться в меню", callback_data="back_to_main")
-        await message.answer(
-            f"❌ Недостаточно средств на балансе.\n"
-            f"Ваш баланс: {balance:.2f} руб.\n"
-            f"Стоимость заказа: {price:.2f} руб.\n"
-            f"Не хватает: {need:.2f} руб.\n\n"
-            "Пополните баланс и повторите заказ.",
-            reply_markup=kb.as_markup()
-        )
-        await state.clear()
-
-async def create_order_and_notify(message: Message, state: FSMContext, new_balance: float):
-    data = await state.get_data()
-    order_id = generate_order_id()
-    service = data['service']
-    quantity = data['quantity']
-    price = data['price']
-    link = data.get('link')  # пока нет, но будет после ввода ссылки
-    # Но у нас сначала идёт ввод количества, потом ссылки. Поэтому здесь ссылки ещё нет.
-    # Надо перенести проверку баланса после ввода ссылки.
-    # Поэтому логика будет так: после ввода ссылки снова проверить баланс, и если хватает – списать и создать.
-    # Поэтому эта функция будет вызываться после get_link.
-    pass
+    await message.answer(f"💰 Стоимость: {price:.2f} руб.\n\nОтправьте ссылку:")
+    await state.set_state(OrderState.waiting_link)
 
 # ====== ОБРАБОТКА ССЫЛКИ ======
 @dp.message(OrderState.waiting_link)
@@ -710,17 +672,419 @@ async def get_link(message: Message, state: FSMContext):
     # Уведомляем администраторов
     admins = await database.get_all_admins()
     for admin in admins:
-        await bot.send_message(
-            admin,
-            f"📦 Новый заказ №{order_id} от {message.from_user.id}\n"
-            f"Услуга: {comment}\nКоличество: {quantity}\nСумма: {price:.2f} руб.\nСсылка: {link}"
-        )
+        try:
+            await bot.send_message(
+                admin,
+                f"📦 Новый заказ №{order_id} от {message.from_user.id}\n"
+                f"Услуга: {comment}\nКоличество: {quantity}\nСумма: {price:.2f} руб.\nСсылка: {link}"
+            )
+        except Exception as e:
+            logging.error(f"Failed to notify admin {admin}: {e}")
 
     await state.clear()
 
-# ====== ФУНКЦИИ ПЛАТЕЖЕЙ (ЮKassa, Heleket) без изменений ======
-# (оставляем те же функции, что были, они используются для пополнения)
-# ...
+# ====== ФУНКЦИИ ПЛАТЕЖЕЙ (ЮKassa) ======
+async def create_yookassa_payment(amount: float, description: str, order_id: str, user_id: int):
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json",
+        "Idempotence-Key": str(uuid.uuid4())
+    }
+    data = {
+        "amount": {
+            "value": f"{amount:.2f}",
+            "currency": "RUB"
+        },
+        "confirmation": {
+            "type": "redirect",
+            "return_url": YOOKASSA_RETURN_URL
+        },
+        "capture": True,
+        "description": description,
+        "metadata": {
+            "order_id": order_id,
+            "user_id": user_id
+        }
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://api.yookassa.ru/v3/payments", headers=headers, json=data) as resp:
+            response_text = await resp.text()
+            logging.info(f"YooKassa response status: {resp.status}")
+            logging.info(f"YooKassa response body: {response_text}")
+            if resp.status not in (200, 201):
+                raise Exception(f"YooKassa error {resp.status}: {response_text}")
+            return json.loads(response_text)
+
+async def check_yookassa_payment(payment_id: str):
+    auth = base64.b64encode(f"{YOOKASSA_SHOP_ID}:{YOOKASSA_SECRET_KEY}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            return data.get('status')
+
+# ====== ФУНКЦИИ ДЛЯ HELEKET ======
+async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
+    payload = {
+        "amount": f"{amount:.2f}",
+        "currency": "USDT",
+        "order_id": order_id,
+    }
+    sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
+    json_data = json.dumps(sorted_payload, separators=(',', ':'))
+    logging.info(f"Heleket request body: {json_data}")
+
+    base64_data = base64.b64encode(json_data.encode()).decode()
+    api_key = HELEKET_API_KEY.strip()
+    merchant_id = HELEKET_MERCHANT_ID.strip()
+    sign = hashlib.md5((base64_data + api_key).encode()).hexdigest()
+    logging.info(f"Heleket sign: {sign}")
+
+    headers = {
+        "merchant": merchant_id,
+        "sign": sign,
+        "Content-Type": "application/json"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, data=json_data) as resp:
+            response_text = await resp.text()
+            logging.info(f"Heleket response status: {resp.status}")
+            logging.info(f"Heleket response body: {response_text}")
+            if resp.status != 200:
+                raise Exception(f"Heleket HTTP error {resp.status}: {response_text}")
+            response_json = json.loads(response_text)
+            if response_json.get('state') != 0:
+                raise Exception(f"Heleket error: {response_json}")
+            return response_json['result']
+
+async def check_heleket_payment(payment_uuid: str):
+    payload = {"uuid": payment_uuid}
+    json_data = json.dumps(payload, separators=(',', ':'))
+    base64_data = base64.b64encode(json_data.encode()).decode()
+    api_key = HELEKET_API_KEY.strip()
+    merchant_id = HELEKET_MERCHANT_ID.strip()
+    sign = hashlib.md5((base64_data + api_key).encode()).hexdigest()
+
+    headers = {
+        "merchant": merchant_id,
+        "sign": sign,
+        "Content-Type": "application/json"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{HELEKET_API_URL}/payment/info", headers=headers, data=json_data) as resp:
+            if resp.status != 200:
+                logging.error(f"Heleket payment info error: HTTP {resp.status}")
+                return None
+            response_json = await resp.json()
+            if response_json.get('state') != 0:
+                logging.error(f"Heleket payment info error: {response_json}")
+                return None
+            return response_json['result'].get('payment_status')
+
+# ====== КАЛЬКУЛЯТОР ======
+@dp.callback_query(F.data == "calc")
+async def calc_menu(call: CallbackQuery):
+    await call.answer()
+    if await check_ban_and_terms(call.from_user.id):
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(text="Подписчики", callback_data="calc_subscribers")],
+        [InlineKeyboardButton(text="Просмотры", callback_data="calc_views")],
+        [InlineKeyboardButton(text="Реакции", callback_data="calc_reactions")],
+        [InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]
+    ]
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": btn.text,
+                    "callback_data": btn.callback_data,
+                } for btn in row
+            ] for row in keyboard
+        ]
+    }
+
+    text = """
+<b>Выберите услугу из списка ниже</b>
+<a href="https://t.me/">Курс на услуги</a>
+    """
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True
+        }
+
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                logging.error(f"Failed to send calc menu via direct API: {await resp.text()}")
+                kb = InlineKeyboardBuilder()
+                kb.button(text="Подписчики", callback_data="calc_subscribers")
+                kb.button(text="Просмотры", callback_data="calc_views")
+                kb.button(text="Реакции", callback_data="calc_reactions")
+                kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
+                kb.adjust(1)
+                await call.message.answer(
+                    text,
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+
+@dp.callback_query(F.data.startswith("calc_"))
+async def calc_choose(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if await check_ban_and_terms(call.from_user.id):
+        return
+    service = call.data.split("_")[1]
+    await state.update_data(service=service)
+
+    if service == "subscribers":
+        kb = InlineKeyboardBuilder()
+        for key, name in SUBSCRIBER_DURATIONS.items():
+            price = SUBSCRIBER_PRICES[key]
+            min_q = SUBSCRIBER_MINIMUMS[key]
+            kb.button(text=f"{name} - {price}₽ за 100 чел (мин {min_q})", callback_data=f"calc_sub_dur_{key}")
+        kb.button(text="◀️ Назад", callback_data="calc")
+        kb.adjust(2)
+        await call.message.edit_text(
+            "Выберите длительность для расчёта:",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(CalcState.waiting_quantity)
+
+    elif service == "reactions":
+        kb = InlineKeyboardBuilder()
+        for key, name in REACTION_TYPES.items():
+            if key == "emoji_list":
+                price_text = "1₽ за 100"
+            else:
+                price_text = "1₽ за 150"
+            kb.button(text=f"{name} ({price_text})", callback_data=f"calc_react_{key}")
+        kb.button(text="◀️ Назад", callback_data="calc")
+        kb.adjust(2)
+        await call.message.edit_text(
+            "Выберите тип реакций для расчёта:",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(CalcState.waiting_reaction_type)
+
+    else:  # views
+        await call.message.answer("Введите количество просмотров:")
+        await state.set_state(CalcState.waiting_quantity)
+
+@dp.callback_query(CalcState.waiting_reaction_type, F.data.startswith("calc_react_"))
+async def calc_reaction_type(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    type_key = call.data.split("_")[2]
+    await state.update_data(reaction_type_key=type_key)
+    await call.message.answer("Введите количество реакций:")
+    await state.set_state(CalcState.waiting_quantity)
+
+@dp.callback_query(CalcState.waiting_quantity, F.data.startswith("calc_sub_dur_"))
+async def calc_subscribers_duration(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    duration_key = call.data.split("_")[3]
+    price_per_100 = SUBSCRIBER_PRICES[duration_key]
+    min_q = SUBSCRIBER_MINIMUMS[duration_key]
+    duration_name = SUBSCRIBER_DURATIONS[duration_key]
+    await state.update_data(duration=duration_name, price_per_100=price_per_100, min_quantity=min_q, service="subscribers")
+    await call.message.edit_text(
+        f"Длительность: {duration_name}, цена {price_per_100}₽ за 100 чел.\n"
+        f"Минимальное количество: {min_q}\n\n"
+        "Введите количество подписчиков:"
+    )
+
+@dp.message(CalcState.waiting_quantity)
+async def calc_result(message: Message, state: FSMContext):
+    if await check_ban_and_terms(message.from_user.id):
+        return await state.clear()
+    if not message.text or not message.text.isdigit():
+        return await message.answer("Введите число!")
+    quantity = int(message.text)
+    data = await state.get_data()
+    service = data.get("service")
+
+    if service == "subscribers":
+        min_q = data.get("min_quantity", 100)
+        if quantity < min_q:
+            return await message.answer(f"Минимальное количество для выбранной длительности — {min_q}.")
+        price_per_100 = data.get("price_per_100")
+        if price_per_100 is None:
+            return await message.answer("Ошибка: не выбрана длительность.")
+        price = (quantity / 100) * price_per_100
+        duration = data.get("duration", "")
+        await message.answer(f"💰 Стоимость {quantity} подписчиков на {duration}: {price:.2f} руб.")
+    elif service == "views":
+        if quantity < 1:
+            return await message.answer("Минимальное количество — 1.")
+        price = quantity * VIEWS_PRICE
+        await message.answer(f"💰 Стоимость {quantity} просмотров: {price:.2f} руб.")
+    elif service == "reactions":
+        if quantity < 1:
+            return await message.answer("Минимальное количество — 1.")
+        reaction_type = data.get("reaction_type_key")
+        if reaction_type is None:
+            return await message.answer("Ошибка: не выбран тип реакций.")
+        price_per_unit = REACTION_PRICES.get(reaction_type, 0.01)
+        price = quantity * price_per_unit
+        type_name = REACTION_TYPES.get(reaction_type, "реакций")
+        await message.answer(f"💰 Стоимость {quantity} {type_name}: {price:.2f} руб.")
+    else:
+        await message.answer("Ошибка: неизвестная услуга.")
+    await state.clear()
+
+# ====== ТЕХ. ПОДДЕРЖКА ======
+@dp.callback_query(F.data == "support")
+async def support(call: CallbackQuery):
+    await call.answer()
+    if await check_ban_and_terms(call.from_user.id):
+        return
+
+    keyboard = [[InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]]
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": btn.text,
+                    "callback_data": btn.callback_data,
+                } for btn in row
+            ] for row in keyboard
+        ]
+    }
+
+    text = """
+<b>Имеются вопросы, хотите предложить идею или у вас возникла проблема</b><tg-emoji emoji-id="5386713103213814186">❕</tg-emoji><b>
+
+</b><blockquote><b>Напишите нам в Telegram: @nBoost_supports </b><tg-emoji emoji-id="5386748326240611247">✅</tg-emoji></blockquote>
+
+<b>Ответ поступает в течение 24 часов</b><tg-emoji emoji-id="5386713103213814186">❕</tg-emoji>
+    """
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True
+        }
+
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                logging.error(f"Failed to send support message via direct API: {await resp.text()}")
+                kb = InlineKeyboardBuilder()
+                kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
+                await call.message.answer(
+                    text.replace("<tg-emoji", "<!-- tg-emoji").replace("</tg-emoji>", "-->"),
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+
+# ====== FAQ ======
+@dp.callback_query(F.data == "faq")
+async def faq(call: CallbackQuery):
+    await call.answer()
+    if await check_ban_and_terms(call.from_user.id):
+        return
+
+    keyboard = [[InlineKeyboardButton(text="◀️ Вернуться назад", callback_data="back_to_main")]]
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": btn.text,
+                    "callback_data": btn.callback_data,
+                } for btn in row
+            ] for row in keyboard
+        ]
+    }
+
+    text = """
+<b>Все частые вопросы которые задают пользователи</b><tg-emoji emoji-id="5379748062124056162">❗️</tg-emoji><b>
+
+</b><blockquote expandable><b>1. Почему мою заявку на накрутку отклонили?
+- Вашу заявку могли отклонить по некоторым причинам, все причины по которым вам могли отклонить заявку прописаны в </b><a href="https://t.me/ineedforyou/"><b>пользовательском соглашении </b></a><b>
+
+2. Я оплатил накрутку, но она так и не началась.
+- После оплаты наша администрация проверяет вашу оплату, если оплата была произведена то мы принимаем вашу заявку на накрутку
+
+3. Почему так долго накручиваете?
+- Причин может быть несколько, но основные причины что сервера нагружены, накрутка происходит обычно в течении часа после принятия заявки.
+
+4. Какие гарантии?
+- Наш сервис предоставляет гарантию 2 дня, в случае если в период этого времени что то произошло и мы это подтвердим, то денежные средства будут вам возращены.
+
+5. Я заказал определённое количество накрутки, но пришло не все.
+- Да, такое бывает когда вы заказываете к примеру 5000 подписчиков, а приходит 4900, все из за того что некоторые боты не получают команду в обработку, обычных в течении часа доходят все боты.</b></blockquote><b>
+
+Основные вопросы мы обговорили, в случае если у вас другой вопрос, то обращайтесь в службу поддержки бота: @nBoost_supports</b>
+    """
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True
+        }
+
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                logging.error(f"Failed to send FAQ via direct API: {await resp.text()}")
+                kb = InlineKeyboardBuilder()
+                kb.button(text="◀️ Вернуться назад", callback_data="back_to_main")
+                await call.message.answer(
+                    text.replace("<tg-emoji", "<!-- tg-emoji").replace("</tg-emoji>", "-->"),
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+
+# ====== КНОПКА НАЗАД ======
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main(call: CallbackQuery):
+    await call.answer()
+    if await check_ban_and_terms(call.from_user.id):
+        return
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await show_main_menu(call.from_user.id)
 
 # ====== АДМИН КОМАНДЫ ======
 async def is_owner(user_id: int) -> bool:
@@ -808,6 +1172,34 @@ async def search_order(message: Message):
     """
     await message.answer(response, parse_mode="HTML", disable_web_page_preview=True)
 
+@dp.message(Command("addadmin"))
+async def add_admin(message: Message):
+    if not await is_owner(message.from_user.id):
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /addadmin <user_id>")
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        return await message.answer("ID должен быть числом.")
+    await database.add_admin(user_id)
+    await message.answer(f"Пользователь {user_id} добавлен в администраторы.")
+
+@dp.message(Command("deladmin"))
+async def remove_admin(message: Message):
+    if not await is_owner(message.from_user.id):
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: /deladmin <user_id>")
+    try:
+        user_id = int(args[1])
+    except ValueError:
+        return await message.answer("ID должен быть числом.")
+    await database.remove_admin(user_id)
+    await message.answer(f"Пользователь {user_id} удалён из администраторов.")
+
 @dp.message(Command("addbalance"))
 async def add_balance(message: Message):
     if not await is_owner(message.from_user.id):
@@ -838,8 +1230,104 @@ async def set_balance(message: Message):
     await database.set_balance(user_id, amount)
     await message.answer(f"Баланс пользователя {user_id} установлен на {amount:.2f} руб.")
 
-# Остальные команды (addadmin, deladmin, all, fixdb, support, faq, calc, back_to_main, accept/decline) остаются без изменений
-# ...
+@dp.message(Command("all"))
+async def broadcast_command(message: Message, state: FSMContext):
+    if not await is_owner(message.from_user.id):
+        return
+    await message.answer("Отправьте сообщение для рассылки всем пользователям (можно с медиа).")
+    await state.set_state(BroadcastState.waiting_message)
+
+@dp.message(BroadcastState.waiting_message)
+async def broadcast_message(message: Message, state: FSMContext):
+    if not await is_owner(message.from_user.id):
+        return await state.clear()
+    users = await database.get_all_users()
+    await message.answer(f"Начинаю рассылку {len(users)} пользователям...")
+    sent = 0
+    blocked = 0
+    for user_id in users:
+        try:
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+            sent += 1
+            await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            blocked += 1
+        except Exception as e:
+            logging.error(f"Failed to send to {user_id}: {e}")
+    await message.answer(f"Рассылка завершена.\nОтправлено: {sent}\nЗаблокировали бота: {blocked}")
+    await state.clear()
+
+@dp.message(Command("fixdb"))
+async def fixdb_command(message: Message):
+    if not await database.is_admin(message.from_user.id):
+        return
+    try:
+        async with aiosqlite.connect(database.DB_PATH) as db:
+            cursor = await db.execute("PRAGMA table_info(orders)")
+            rows = await cursor.fetchall()
+            info = "Структура таблицы orders:\n"
+            for row in rows:
+                info += f"{row[0]}: {row[1]} ({row[2]})\n"
+            await message.answer(info)
+    except Exception as e:
+        await message.answer(f"Ошибка: {e}")
+
+# ====== ОБРАБОТЧИКИ ПРИНЯТИЯ/ОТКЛОНЕНИЯ ======
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept_order(call: CallbackQuery):
+    await call.answer()
+    if not await database.is_admin(call.from_user.id):
+        return
+    order_id = call.data.split("_")[1]
+    order = await database.get_order(order_id)
+    if not order:
+        return await call.message.answer("Заказ не найден.")
+    if order[6] not in ("PAID", "ACCEPTED"):
+        return await call.message.answer("Этот заказ не может быть принят.")
+    await database.update_order_status(order_id, "ACCEPTED", "Принят администратором")
+    await call.message.edit_text(call.message.text + "\n\n✅ Заказ принят.", reply_markup=None)
+    try:
+        await bot.send_message(order[1], f"✅ Ваш заказ №{order_id} принят и будет выполнен.")
+    except TelegramForbiddenError:
+        logging.warning(f"User {order[1]} blocked the bot.")
+    await call.message.answer("Заказ подтверждён.")
+
+@dp.callback_query(F.data.startswith("decline_"))
+async def decline_order_start(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not await database.is_admin(call.from_user.id):
+        return
+    order_id = call.data.split("_")[1]
+    order = await database.get_order(order_id)
+    if not order:
+        return await call.message.answer("Заказ не найден.")
+    if order[6] not in ("PAID", "ACCEPTED"):
+        return await call.message.answer("Этот заказ не может быть отклонён.")
+    await state.update_data(order_id=order_id, order=order)
+    await call.message.answer("Введите причину отклонения заказа:")
+    await state.set_state(DeclineReason.waiting_reason)
+
+@dp.message(DeclineReason.waiting_reason)
+async def decline_order_reason(message: Message, state: FSMContext):
+    if not await database.is_admin(message.from_user.id):
+        return await state.clear()
+    reason = message.text.strip()
+    data = await state.get_data()
+    order_id = data['order_id']
+    order = data['order']
+    await database.update_order_status(order_id, "DECLINED", f"Отклонён: {reason}")
+    # Возвращаем средства пользователю
+    await database.update_balance(order[1], order[4])
+    try:
+        await bot.send_message(order[1], f"❌ Ваш заказ №{order_id} отклонён.\nПричина: {reason}\nСредства возвращены на баланс.")
+    except TelegramForbiddenError:
+        logging.warning(f"User {order[1]} blocked the bot.")
+    await message.answer(f"❌ Заказ №{order_id} отклонён. Средства возвращены.")
+    await state.clear()
 
 # ====== RUN ======
 async def main():
