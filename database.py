@@ -5,7 +5,7 @@ DB_PATH = "bot_database.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица пользователей с полем balance
+        # Таблица пользователей
         await db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -14,12 +14,16 @@ async def init_db():
                 balance REAL DEFAULT 0
             )
         ''')
-        # Проверяем наличие колонки balance
         try:
             await db.execute('SELECT balance FROM users LIMIT 1')
         except aiosqlite.OperationalError:
             await db.execute('ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0')
             logging.info("Column 'balance' added to users table.")
+        try:
+            await db.execute('SELECT accepted_terms FROM users LIMIT 1')
+        except aiosqlite.OperationalError:
+            await db.execute('ALTER TABLE users ADD COLUMN accepted_terms INTEGER DEFAULT 0')
+            logging.info("Column 'accepted_terms' added to users table.")
 
         # Таблица заказов
         await db.execute('''
@@ -38,7 +42,6 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        # Проверяем наличие всех колонок
         for col in ['payment_id', 'payment_charge_id', 'payment_method', 'comment']:
             try:
                 await db.execute(f'SELECT {col} FROM orders LIMIT 1')
@@ -46,7 +49,7 @@ async def init_db():
                 await db.execute(f'ALTER TABLE orders ADD COLUMN {col} TEXT')
                 logging.info(f"Column '{col}' added to orders table.")
 
-        # Таблица транзакций (история пополнений)
+        # Таблица транзакций
         await db.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,8 +68,29 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY
             )
         ''')
+
+        # Таблица состояния бота
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS bot_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        await db.execute('INSERT OR IGNORE INTO bot_state (key, value) VALUES ("active", "1")')
         await db.commit()
     logging.info("Database initialized.")
+
+# ====== Состояние бота ======
+async def is_bot_active() -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT value FROM bot_state WHERE key = "active"') as cursor:
+            row = await cursor.fetchone()
+            return row and row[0] == "1"
+
+async def set_bot_active(active: bool):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE bot_state SET value = ? WHERE key = "active"', ("1" if active else "0",))
+        await db.commit()
 
 # ====== Пользователи ======
 async def add_user(user_id: int):
@@ -90,7 +114,6 @@ async def set_balance(user_id: int, amount: float):
         await db.execute('UPDATE users SET balance = ? WHERE user_id = ?', (amount, user_id))
         await db.commit()
 
-# Остальные функции пользователей (banned, accepted_terms) остаются без изменений
 async def is_banned(user_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('SELECT banned FROM users WHERE user_id = ?', (user_id,)) as cursor:
