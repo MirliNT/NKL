@@ -1,5 +1,6 @@
 import aiosqlite
 import logging
+from datetime import datetime, timedelta
 
 DB_PATH = "bot_database.db"
 
@@ -17,48 +18,50 @@ async def init_db():
                 ban_reason TEXT
             )
         ''')
-        for col in ['banned_by', 'banned_at', 'ban_reason']:
-            try:
-                await db.execute(f'SELECT {col} FROM users LIMIT 1')
-            except aiosqlite.OperationalError:
-                await db.execute(f'ALTER TABLE users ADD COLUMN {col} TEXT')
-                logging.info(f"Column '{col}' added to users table.")
-        try:
-            await db.execute('SELECT balance FROM users LIMIT 1')
-        except aiosqlite.OperationalError:
-            await db.execute('ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0')
-            logging.info("Column 'balance' added to users table.")
-        try:
-            await db.execute('SELECT accepted_terms FROM users LIMIT 1')
-        except aiosqlite.OperationalError:
-            await db.execute('ALTER TABLE users ADD COLUMN accepted_terms INTEGER DEFAULT 0')
-            logging.info("Column 'accepted_terms' added to users table.")
-
-        # Таблица заказов (добавляем поле status WAITING_CONFIRM)
+        # Таблица услуг
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS services (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform TEXT,
+                category TEXT,
+                subcategory TEXT,
+                name TEXT,
+                price REAL DEFAULT 1.0,
+                speed INTEGER DEFAULT 2,
+                description TEXT,
+                min_quantity INTEGER,
+                max_quantity INTEGER
+            )
+        ''')
+        # Таблица промокодов
+        await db.execute('''
+            CREATE TABLE IF NOT EXISTS promocodes (
+                code TEXT PRIMARY KEY,
+                discount_percent INTEGER,
+                uses INTEGER DEFAULT 0,
+                max_uses INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Таблица заказов (добавляем service_id и promocode)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 order_id TEXT PRIMARY KEY,
                 user_id INTEGER,
-                service TEXT,
+                service_id INTEGER,
                 quantity INTEGER,
                 price REAL,
                 link TEXT,
-                status TEXT DEFAULT 'NEW',
+                status TEXT DEFAULT 'WAITING_CONFIRM',
                 comment TEXT,
                 payment_id TEXT,
                 payment_charge_id TEXT,
                 payment_method TEXT,
+                promocode TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        for col in ['payment_id', 'payment_charge_id', 'payment_method', 'comment']:
-            try:
-                await db.execute(f'SELECT {col} FROM orders LIMIT 1')
-            except aiosqlite.OperationalError:
-                await db.execute(f'ALTER TABLE orders ADD COLUMN {col} TEXT')
-                logging.info(f"Column '{col}' added to orders table.")
-
-        # Таблица транзакций
+        # Таблица транзакций (пополнения)
         await db.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,14 +73,12 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
         # Таблица администраторов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY
             )
         ''')
-
         # Таблица состояния бота
         await db.execute('''
             CREATE TABLE IF NOT EXISTS bot_state (
@@ -106,10 +107,7 @@ async def get_bot_status() -> dict:
 async def set_bot_active(active: bool, reason: str = ""):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute('UPDATE bot_state SET value = ? WHERE key = "active"', ("1" if active else "0",))
-        if reason:
-            await db.execute('UPDATE bot_state SET value = ? WHERE key = "reason"', (reason,))
-        else:
-            await db.execute('UPDATE bot_state SET value = ? WHERE key = "reason"', ("",))
+        await db.execute('UPDATE bot_state SET value = ? WHERE key = "reason"', (reason,))
         await db.commit()
 
 # ====== Пользователи ======
@@ -175,12 +173,80 @@ async def get_all_users():
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+# ====== Услуги ======
+async def add_service(platform, category, subcategory, name, price, min_q, max_q, speed=2, description=""):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'INSERT INTO services (platform, category, subcategory, name, price, min_quantity, max_quantity, speed, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (platform, category, subcategory, name, price, min_q, max_q, speed, description)
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+async def get_service(service_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM services WHERE id = ?', (service_id,)) as cursor:
+            return await cursor.fetchone()
+
+async def get_services_by_platform(platform: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM services WHERE platform = ?', (platform,)) as cursor:
+            return await cursor.fetchall()
+
+async def get_services_by_category(platform: str, category: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM services WHERE platform = ? AND category = ?', (platform, category)) as cursor:
+            return await cursor.fetchall()
+
+async def get_services_by_subcategory(platform: str, category: str, subcategory: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM services WHERE platform = ? AND category = ? AND subcategory = ?', (platform, category, subcategory)) as cursor:
+            return await cursor.fetchall()
+
+async def update_service_price(service_id: int, price: float):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE services SET price = ? WHERE id = ?', (price, service_id))
+        await db.commit()
+
+async def update_service_speed(service_id: int, speed: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE services SET speed = ? WHERE id = ?', (speed, service_id))
+        await db.commit()
+
+async def update_service_description(service_id: int, description: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE services SET description = ? WHERE id = ?', (description, service_id))
+        await db.commit()
+
+async def update_all_prices(discount_percent: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE services SET price = price * (1 - ?/100.0)', (discount_percent,))
+        await db.commit()
+
+# ====== Промокоды ======
+async def add_promocode(code: str, discount_percent: int, max_uses: int = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('INSERT INTO promocodes (code, discount_percent, max_uses) VALUES (?, ?, ?)',
+                         (code, discount_percent, max_uses))
+        await db.commit()
+
+async def get_promocode(code: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM promocodes WHERE code = ?', (code,)) as cursor:
+            return await cursor.fetchone()
+
+async def use_promocode(code: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('UPDATE promocodes SET uses = uses + 1 WHERE code = ?', (code,))
+        await db.commit()
+
 # ====== Заказы ======
-async def create_order(order_id: str, user_id: int, service: str, quantity: int, price: float, link: str, status: str = "NEW", comment: str = None, payment_method: str = None):
+async def create_order(order_id: str, user_id: int, service_id: int, quantity: int, price: float, link: str,
+                       status: str = "WAITING_CONFIRM", comment: str = None, promocode: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            'INSERT INTO orders (order_id, user_id, service, quantity, price, link, status, comment, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (order_id, user_id, service, quantity, price, link, status, comment, payment_method)
+            'INSERT INTO orders (order_id, user_id, service_id, quantity, price, link, status, comment, promocode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (order_id, user_id, service_id, quantity, price, link, status, comment, promocode)
         )
         await db.commit()
 
@@ -191,32 +257,18 @@ async def get_order(order_id: str):
 
 async def update_order_status(order_id: str, status: str, comment: str = None):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            'UPDATE orders SET status = ?, comment = ? WHERE order_id = ?',
-            (status, comment, order_id)
-        )
+        await db.execute('UPDATE orders SET status = ?, comment = ? WHERE order_id = ?', (status, comment, order_id))
         await db.commit()
 
 async def update_order_payment_id(order_id: str, payment_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            'UPDATE orders SET payment_id = ? WHERE order_id = ?',
-            (payment_id, order_id)
-        )
+        await db.execute('UPDATE orders SET payment_id = ? WHERE order_id = ?', (payment_id, order_id))
         await db.commit()
 
 async def update_order_payment_method(order_id: str, method: str):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            'UPDATE orders SET payment_method = ? WHERE order_id = ?',
-            (method, order_id)
-        )
+        await db.execute('UPDATE orders SET payment_method = ? WHERE order_id = ?', (method, order_id))
         await db.commit()
-
-async def get_pending_orders():
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute('SELECT * FROM orders WHERE status = ?', ("PENDING",)) as cursor:
-            return await cursor.fetchall()
 
 async def get_orders_by_status(status: str):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -240,13 +292,34 @@ async def get_transactions(user_id: int, limit: int = 20):
         ) as cursor:
             return await cursor.fetchall()
 
-async def get_all_transactions(limit: int = 50):
+async def get_all_transactions(limit: int = 100):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?', (limit,)) as cursor:
+            return await cursor.fetchall()
+
+# ====== Статистика ======
+async def get_user_count():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT COUNT(*) FROM users') as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+async def get_completed_orders():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT COUNT(*) FROM orders WHERE status = "PAID" OR status = "ACCEPTED"') as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+async def get_revenue(start_date: datetime, end_date: datetime = None):
+    if end_date is None:
+        end_date = datetime.now()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            'SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?',
-            (limit,)
+            'SELECT SUM(price) FROM orders WHERE status IN ("PAID", "ACCEPTED") AND created_at BETWEEN ? AND ?',
+            (start_date, end_date)
         ) as cursor:
-            return await cursor.fetchall()
+            row = await cursor.fetchone()
+            return row[0] if row[0] else 0.0
 
 # ====== Администраторы ======
 async def add_admin(user_id: int):
