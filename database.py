@@ -18,6 +18,26 @@ async def init_db():
                 ban_reason TEXT
             )
         ''')
+        # Проверяем наличие колонки balance
+        try:
+            await db.execute('SELECT balance FROM users LIMIT 1')
+        except aiosqlite.OperationalError:
+            await db.execute('ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0')
+            logging.info("Column 'balance' added to users table.")
+        # Проверяем наличие колонки accepted_terms
+        try:
+            await db.execute('SELECT accepted_terms FROM users LIMIT 1')
+        except aiosqlite.OperationalError:
+            await db.execute('ALTER TABLE users ADD COLUMN accepted_terms INTEGER DEFAULT 0')
+            logging.info("Column 'accepted_terms' added to users table.")
+        # Проверяем наличие колонок для бана
+        for col in ['banned_by', 'banned_at', 'ban_reason']:
+            try:
+                await db.execute(f'SELECT {col} FROM users LIMIT 1')
+            except aiosqlite.OperationalError:
+                await db.execute(f'ALTER TABLE users ADD COLUMN {col} TEXT')
+                logging.info(f"Column '{col}' added to users table.")
+
         # Таблица услуг
         await db.execute('''
             CREATE TABLE IF NOT EXISTS services (
@@ -34,6 +54,7 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         # Таблица промокодов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS promocodes (
@@ -44,6 +65,7 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         # Таблица заказов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS orders (
@@ -62,6 +84,14 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Проверяем наличие колонок в orders
+        for col in ['payment_id', 'payment_charge_id', 'payment_method', 'promocode', 'comment']:
+            try:
+                await db.execute(f'SELECT {col} FROM orders LIMIT 1')
+            except aiosqlite.OperationalError:
+                await db.execute(f'ALTER TABLE orders ADD COLUMN {col} TEXT')
+                logging.info(f"Column '{col}' added to orders table.")
+
         # Таблица транзакций
         await db.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
@@ -74,12 +104,14 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         # Таблица администраторов
         await db.execute('''
             CREATE TABLE IF NOT EXISTS admins (
                 user_id INTEGER PRIMARY KEY
             )
         ''')
+
         # Таблица состояния бота
         await db.execute('''
             CREATE TABLE IF NOT EXISTS bot_state (
@@ -317,7 +349,7 @@ async def get_revenue(start_date: datetime, end_date: datetime = None):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             'SELECT SUM(price) FROM orders WHERE status IN ("PAID", "ACCEPTED") AND created_at BETWEEN ? AND ?',
-            (start_date, end_date)
+            (start_date.isoformat(), end_date.isoformat())
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row[0] else 0.0
