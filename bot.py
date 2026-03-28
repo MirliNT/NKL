@@ -1055,8 +1055,11 @@ async def tt_live_viewers_menu(call: CallbackQuery, state: FSMContext):
     )
     await state.set_state(OrderState.waiting_quantity)
 
-@dp.callback_query(F.data.startswith("tt_live_") and not F.data.startswith("tt_live_ai"))
+@dp.callback_query(F.data.startswith("tt_live_"))
 async def tt_live_duration(call: CallbackQuery, state: FSMContext):
+    # Исключаем callback'и, начинающиеся с tt_live_ai
+    if call.data.startswith("tt_live_ai"):
+        return
     await call.answer()
     minutes = call.data.split("_")[2]
     await state.update_data(subtype=f"{minutes} минут", service_name=f"Зрители на трансляцию ({minutes} мин)")
