@@ -84,12 +84,14 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        # Проверяем наличие колонок в orders
-        for col in ['payment_id', 'payment_charge_id', 'payment_method', 'promocode', 'comment']:
+        # Проверяем наличие колонок в orders (включая service_id)
+        for col in ['service_id', 'payment_id', 'payment_charge_id', 'payment_method', 'promocode', 'comment']:
             try:
                 await db.execute(f'SELECT {col} FROM orders LIMIT 1')
             except aiosqlite.OperationalError:
-                await db.execute(f'ALTER TABLE orders ADD COLUMN {col} TEXT')
+                # Определяем тип колонки: для service_id это INTEGER, для остальных TEXT
+                col_type = 'INTEGER' if col == 'service_id' else 'TEXT'
+                await db.execute(f'ALTER TABLE orders ADD COLUMN {col} {col_type}')
                 logging.info(f"Column '{col}' added to orders table.")
 
         # Таблица транзакций
