@@ -1,11 +1,12 @@
+import aiosqlite
+import logging
+import uuid
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import logging
-import uuid
-from bot_instance import bot
 
+from bot_instance import bot
 from states.states import BalanceTopup
 import database as db
 from utils.payments import create_yookassa_payment, create_heleket_payment, check_yookassa_payment, check_heleket_payment
@@ -135,8 +136,9 @@ async def create_heleket_topup(message: Message, state: FSMContext, amount: floa
 async def check_topup_callback(call: CallbackQuery):
     await call.answer()
     payment_id = call.data.split("_")[2]
-    async with aiosqlite.connect(database.DB_PATH) as db:
-        async with db.execute('SELECT * FROM transactions WHERE payment_id = ?', (payment_id,)) as cursor:
+    # Используем db.DB_PATH и aiosqlite (импортирован)
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        async with conn.execute('SELECT * FROM transactions WHERE payment_id = ?', (payment_id,)) as cursor:
             tx = await cursor.fetchone()
     if not tx:
         await call.message.answer("Транзакция не найдена.")
@@ -152,9 +154,9 @@ async def check_topup_callback(call: CallbackQuery):
         success_status = 'paid'
     if status == success_status:
         await db.update_balance(tx[1], tx[2])
-        async with aiosqlite.connect(database.DB_PATH) as db:
-            await db.execute('UPDATE transactions SET status = ? WHERE id = ?', ("success", tx[0]))
-            await db.commit()
+        async with aiosqlite.connect(db.DB_PATH) as conn:
+            await conn.execute('UPDATE transactions SET status = ? WHERE id = ?', ("success", tx[0]))
+            await conn.commit()
         await call.message.edit_text(f"✅ Баланс пополнен на {tx[2]:.2f} руб.", reply_markup=None)
         await call.message.answer("Теперь вы можете заказывать услуги.")
     else:
