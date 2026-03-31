@@ -11,7 +11,7 @@ from config import BOT_TOKEN, PHOTO_PATH
 import database as db
 from keyboards.main import get_main_keyboard
 from states.states import OrderState
-from utils.helpers import escape_html
+#from utils.helpers import escape_html
 import settings
 
 router = Router()
