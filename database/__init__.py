@@ -67,14 +67,8 @@ from .admins import (
     get_all_admins
 )
 
-from .bot_state import (
-    is_bot_active,
-    get_bot_status,
-    set_bot_active
-)
-
 from .settings_db import (
-    init_settings_table,
+    create_settings_table,
     get_setting,
     set_setting,
     get_all_settings
