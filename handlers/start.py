@@ -3,30 +3,27 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import json
-import aiohttp
-import logging
-from bot_instance import bot
 
-from config import BOT_TOKEN, OWNER_ID, PHOTO_PATH  # добавить OWNER_ID
+from bot_instance import bot
+from config import OWNER_ID, PHOTO_PATH
+from keyboards import get_main_keyboard
 import database as db
-from keyboards.main import get_main_keyboard
-from states.states import OrderState
-#from utils.helpers import escape_html
-import settings
+import logging
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-@router.message(Command("start"))
-async def start_handler(message: Message):
-    await db.add_user(message.from_user.id)
-    if await check_ban_and_terms(message.from_user.id):
-        return
-    await show_main_menu(message.chat.id)
+# ====== Вспомогательные функции ======
+async def is_bot_available(user_id: int) -> bool:
+    """Проверяет доступность бота для пользователя (админы и владелец всегда могут использовать)."""
+    if user_id == OWNER_ID or await db.is_admin(user_id):
+        return True
+    if await db.is_banned(user_id):
+        return False
+    return await db.is_bot_active()
 
 async def check_ban_and_terms(user_id: int) -> bool:
-    """Проверяет бан и принятие оферты."""
+    """Проверяет бан и принятие оферты. Возвращает True, если доступ запрещён."""
     if not await is_bot_available(user_id):
         bot_status = await db.get_bot_status()
         if bot_status.get('active') == '0':
@@ -57,15 +54,8 @@ async def check_ban_and_terms(user_id: int) -> bool:
         return True
     return False
 
-async def is_bot_available(user_id: int) -> bool:
-    """Проверяет доступность бота для пользователя."""
-    if user_id == OWNER_ID or await db.is_admin(user_id):
-        return True
-    if await db.is_banned(user_id):
-        return False
-    return await db.is_bot_active()
-
 async def show_main_menu(chat_id: int):
+    """Отправляет главное меню с фото (если есть) и кнопками."""
     balance = await db.get_balance(chat_id)
     text = f"""
 <b>Приветствую!</b> <tg-emoji emoji-id="5877700484453634587">✈️</tg-emoji>
@@ -78,38 +68,19 @@ async def show_main_menu(chat_id: int):
 <b>💰 Ваш баланс: {balance:.2f} руб.</b>
     """
     kb = get_main_keyboard()
-    async with aiohttp.ClientSession() as session:
-        try:
-            photo = FSInputFile(PHOTO_PATH)
-            form_data = aiohttp.FormData()
-            form_data.add_field('chat_id', str(chat_id))
-            form_data.add_field('caption', text)
-            form_data.add_field('parse_mode', 'HTML')
-            form_data.add_field('reply_markup', json.dumps(kb))
-            form_data.add_field('photo', open(PHOTO_PATH, 'rb'), filename='photo.jpg')
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            async with session.post(url, data=form_data) as resp:
-                if resp.status != 200:
-                    # fallback: send message without photo
-                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-                    payload = {
-                        "chat_id": chat_id,
-                        "text": text,
-                        "parse_mode": "HTML",
-                        "reply_markup": kb,
-                        "disable_web_page_preview": True
-                    }
-                    await session.post(url, json=payload)
-        except FileNotFoundError:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "reply_markup": kb,
-                "disable_web_page_preview": True
-            }
-            await session.post(url, json=payload)
+    try:
+        photo = FSInputFile(PHOTO_PATH)
+        await bot.send_photo(chat_id, photo, caption=text, reply_markup=kb, parse_mode="HTML")
+    except FileNotFoundError:
+        await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+# ====== Хендлеры ======
+@router.message(Command("start"))
+async def start_handler(message: Message):
+    await db.add_user(message.from_user.id)
+    if await check_ban_and_terms(message.from_user.id):
+        return
+    await show_main_menu(message.chat.id)
 
 @router.callback_query(F.data == "accept_terms")
 async def accept_terms_callback(call: CallbackQuery):
