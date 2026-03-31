@@ -12,21 +12,17 @@ from config import DB_PATH
 
 logger = logging.getLogger(__name__)
 
-# Пул соединений (простой, без ограничений, но можно настроить)
+# Пул соединений (одно соединение)
 _connection_pool = None
-
 
 async def get_connection() -> aiosqlite.Connection:
     """
-    Возвращает новое соединение с базой данных.
-    Если пул не создан, создаёт его (ленивая инициализация).
+    Возвращает активное соединение с базой данных.
     """
     global _connection_pool
     if _connection_pool is None:
-        # Создаём пул с одним соединением по умолчанию (можно увеличить)
-        _connection_pool = aiosqlite.connect(DB_PATH)
+        _connection_pool = await aiosqlite.connect(DB_PATH)
     return _connection_pool
-
 
 @asynccontextmanager
 async def transaction():
@@ -45,10 +41,7 @@ async def transaction():
         await conn.rollback()
         logger.error(f"Transaction rolled back: {e}")
         raise
-    finally:
-        # Не закрываем соединение, чтобы можно было использовать повторно
-        pass
-
+    # не закрываем соединение
 
 async def execute(query: str, params: Optional[Tuple] = None, conn: aiosqlite.Connection = None) -> aiosqlite.Cursor:
     """
@@ -67,7 +60,6 @@ async def execute(query: str, params: Optional[Tuple] = None, conn: aiosqlite.Co
         if close_after:
             await conn.close()
 
-
 async def fetchone(query: str, params: Optional[Tuple] = None, conn: aiosqlite.Connection = None) -> Optional[Tuple]:
     """
     Возвращает одну строку результата запроса.
@@ -82,7 +74,6 @@ async def fetchone(query: str, params: Optional[Tuple] = None, conn: aiosqlite.C
     finally:
         if close_after:
             await conn.close()
-
 
 async def fetchall(query: str, params: Optional[Tuple] = None, conn: aiosqlite.Connection = None) -> List[Tuple]:
     """
@@ -99,7 +90,6 @@ async def fetchall(query: str, params: Optional[Tuple] = None, conn: aiosqlite.C
         if close_after:
             await conn.close()
 
-
 async def execute_many(query: str, params_list: List[Tuple], conn: aiosqlite.Connection = None) -> None:
     """
     Выполняет массовую вставку или обновление.
@@ -115,13 +105,11 @@ async def execute_many(query: str, params_list: List[Tuple], conn: aiosqlite.Con
         if close_after:
             await conn.close()
 
-
 async def init_db():
     """
     Инициализирует базу данных, создавая все таблицы, если они не существуют.
     Вызывает функции создания таблиц из соответствующих модулей.
     """
-    # Импортируем функции создания таблиц (они будут определены в соответствующих модулях)
     from .users import create_users_table
     from .orders import create_orders_table
     from .services import create_services_table
