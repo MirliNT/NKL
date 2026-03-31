@@ -33,7 +33,7 @@ async def main():
     logger.info("Database initialized")
 
     # Создание бота и диспетчера
-    bot = Bot(token=BOT_TOKEN)
+    from bot_instance import bot
     dp = Dispatcher()
 
     # Регистрация middleware
