@@ -70,7 +70,7 @@ def generate_heleket_sign(data: dict, api_key: str) -> str:
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "USDT",
+        "currency": "RUB",
         "order_id": order_id,
     }
     sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
