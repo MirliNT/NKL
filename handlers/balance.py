@@ -20,19 +20,23 @@ logger = logging.getLogger(__name__)
 async def balance_menu(call: CallbackQuery):
     await call.answer()
     balance = await db.get_balance(call.from_user.id)
+    text = f"""
+<b>💰 Ваш баланс: {balance:.2f} руб.
+
+Пополняя баланс вы соглашаетесь с</b> <a href="https://t.me/your_offer_link">пользовательским соглашением</a> <b>и</b> <a href="https://t.me/your_terms_link">договором оферты </a><b>
+Выберите способ пополнения из списка ниже:</b>
+    """
     kb = InlineKeyboardBuilder()
-    min_yookassa = await settings.get_min_topup_yookassa()
-    min_heleket = await settings.get_min_topup_heleket()
-    kb.button(text=f"💳 Пополнить картой (от {min_yookassa:.0f}₽)", callback_data="topup_yookassa")
-    kb.button(text=f"₿ Пополнить криптовалютой (от {min_heleket:.0f}₽)", callback_data="topup_heleket")
+    kb.button(text="💳 СБП, QR, Карты (от 10₽)", callback_data="topup_yookassa")
+    kb.button(text="Криптовалюта (от 10₽)", callback_data="topup_heleket")
     kb.button(text="📜 История пополнений", callback_data="topup_history")
     kb.button(text="◀️ Назад", callback_data="back_to_main")
     kb.adjust(1)
     await call.message.edit_text(
-        f"💰 <b>Ваш баланс: {balance:.2f} руб.</b>\n\n"
-        "Выберите действие:",
+        text,
         reply_markup=kb.as_markup(),
-        parse_mode="HTML"
+        parse_mode="HTML",
+        disable_web_page_preview=True
     )
 
 @router.callback_query(F.data == "topup_yookassa")
@@ -42,7 +46,7 @@ async def topup_yookassa_start(call: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Отмена", callback_data="balance")
     await call.message.edit_text(
-        f"Введите сумму пополнения (от {await settings.get_min_topup_yookassa():.2f} руб.):",
+        f"Введите сумму пополнения (от 10.00 руб.):",
         reply_markup=kb.as_markup()
     )
     await state.set_state(BalanceTopup.waiting_amount)
@@ -54,7 +58,7 @@ async def topup_heleket_start(call: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Отмена", callback_data="balance")
     await call.message.edit_text(
-        f"Введите сумму пополнения (от {await settings.get_min_topup_heleket():.2f} руб.):",
+        f"Введите сумму пополнения (от 10.00 руб.):",
         reply_markup=kb.as_markup()
     )
     await state.set_state(BalanceTopup.waiting_amount)
@@ -66,10 +70,8 @@ async def topup_amount(message: Message, state: FSMContext):
     amount = float(message.text)
     data = await state.get_data()
     method = data.get("method")
-    if method == "yookassa" and amount < await settings.get_min_topup_yookassa():
-        return await message.answer(f"Минимальная сумма пополнения: {await settings.get_min_topup_yookassa():.2f} руб.")
-    if method == "heleket" and amount < await settings.get_min_topup_heleket():
-        return await message.answer(f"Минимальная сумма пополнения: {await settings.get_min_topup_heleket():.2f} руб.")
+    if amount < 10.0:
+        return await message.answer("Минимальная сумма пополнения: 10.00 руб.")
 
     await state.update_data(amount=amount)
     if method == "yookassa":
@@ -91,11 +93,11 @@ async def create_yookassa_topup(message: Message, state: FSMContext, amount: flo
             raise Exception("Missing payment data")
         await db.add_transaction(message.from_user.id, amount, "yookassa", "pending", payment_id)
         kb = InlineKeyboardBuilder()
-        kb.button(text="💳 Оплатить картой", url=confirmation_url)
-        kb.button(text="✅ Проверить оплату", callback_data=f"check_topup_{payment_id}")
+        kb.button(text="💳 Оплатить по СБП", url=confirmation_url)
+        kb.button(text="✅ Я оплатил!", callback_data=f"check_topup_{payment_id}")
         await message.answer(
             f"Создан счёт на пополнение баланса на {amount:.2f} руб.\n"
-            "После оплаты нажмите «Проверить оплату».",
+            "После оплаты нажмите «Я оплатил!».",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
         )
@@ -119,11 +121,11 @@ async def create_heleket_topup(message: Message, state: FSMContext, amount: floa
             raise Exception("Missing payment data")
         await db.add_transaction(message.from_user.id, amount, "heleket", "pending", payment_uuid)
         kb = InlineKeyboardBuilder()
-        kb.button(text="₿ Оплатить криптовалютой", url=payment_url)
-        kb.button(text="✅ Проверить оплату", callback_data=f"check_topup_{payment_uuid}")
+        kb.button(text="Криптовалюта", url=payment_url)
+        kb.button(text="✅ Я оплатил!", callback_data=f"check_topup_{payment_uuid}")
         await message.answer(
-            f"Создан счёт на пополнение баланса на {amount:.2f} руб. (эквивалент в USDT).\n"
-            "После оплаты нажмите «Проверить оплату».",
+            f"Создан счёт на пополнение баланса на {amount:.2f} руб.\n"
+            "После оплаты нажмите на кнопку «Я оплатил!».",
             reply_markup=kb.as_markup(),
             disable_web_page_preview=True
         )
@@ -158,9 +160,8 @@ async def check_topup_callback(call: CallbackQuery):
             await conn.execute('UPDATE transactions SET status = ? WHERE id = ?', ("success", tx[0]))
             await conn.commit()
         await call.message.edit_text(f"✅ Баланс пополнен на {tx[2]:.2f} руб.", reply_markup=None)
-        await call.message.answer("Теперь вы можете заказывать услуги.")
     else:
-        await call.message.answer(f"❌ Платёж не оплачен (статус: {status}). Попробуйте позже.")
+        await call.message.answer(f"❌ Счёт не оплачен. Попробуйте позже.")
 
 @router.callback_query(F.data == "topup_history")
 async def topup_history(call: CallbackQuery):
@@ -169,7 +170,7 @@ async def topup_history(call: CallbackQuery):
     if not txs:
         text = "📜 История пополнений пуста."
     else:
-        text = "📜 <b>Последние пополнения:</b>\n"
+        text = "📜 <b>Последние пополнения баланса:</b>\n"
         for tx in txs:
             status_emoji = "✅" if tx[4] == "success" else "❌"
             text += f"{status_emoji} {tx[6][:10]} +{tx[2]:.2f} руб. ({tx[3]})\n"
