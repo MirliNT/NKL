@@ -1,6 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from keyboards import get_back_keyboard
+from handlers.start import show_main_menu
 
 router = Router()
 
