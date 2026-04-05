@@ -68,11 +68,18 @@ def generate_heleket_sign(data: dict, api_key: str) -> str:
     return hashlib.md5((base64_data + api_key).encode()).hexdigest()
 
 async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
+    """
+    Создаёт платёж через Heleket с конвертацией RUB -> USDT.
+    amount – сумма в рублях.
+    """
     payload = {
         "amount": f"{amount:.2f}",
-        "currency": "RUB",
+        "currency": "RUB",           # фиатная валюта счёта
+        "to_currency": "USDT",       # криптовалюта для оплаты
         "order_id": order_id,
+        # "course_source": "Binance", # опционально: источник курса
     }
+    # Сортируем ключи для стабильной подписи
     sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
     json_data = json.dumps(sorted_payload, separators=(',', ':'))
     base64_data = base64.b64encode(json_data.encode()).decode()
@@ -95,7 +102,7 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
             response_json = json.loads(response_text)
             if response_json.get('state') != 0:
                 raise Exception(f"Heleket error: {response_json}")
-            return response_json['result']
+            return response_json['result']   # содержит uuid, url, payer_amount, payer_currency и др.
 
 async def check_heleket_payment(payment_uuid: str):
     payload = {"uuid": payment_uuid}
