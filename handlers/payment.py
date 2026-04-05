@@ -67,25 +67,28 @@ def generate_heleket_sign(data: dict, api_key: str) -> str:
     base64_data = base64.b64encode(json_data.encode()).decode()
     return hashlib.md5((base64_data + api_key).encode()).hexdigest()
 
-async def create_heleket_payment(amount: float, order_id: str, description: str, user_id: int):
+async def create_heleket_payment(amount_rub: float, order_id: str, description: str, user_id: int):
     """
-    Создаёт платёж через Heleket с конвертацией RUB -> USDT.
-    amount – сумма в рублях.
+    Создаёт счёт в Heleket на сумму в рублях.
+    Пользователь на странице оплаты сам выберет криптовалюту и сеть.
     """
     payload = {
-        "amount": f"{amount:.2f}",
-        "currency": "RUB",           # фиатная валюта счёта
-        "to_currency": "RUB",       # криптовалюта для оплаты
+        "amount": f"{amount_rub:.2f}",
+        "currency": "RUB",           # <-- валюта счёта – рубли
         "order_id": order_id,
-        # "course_source": "Binance", # опционально: источник курса
+        "description": description,
+        # "url_success": "https://t.me/your_bot", # опционально, куда вернуться после оплаты
     }
     # Сортируем ключи для стабильной подписи
     sorted_payload = {k: payload[k] for k in sorted(payload.keys())}
     json_data = json.dumps(sorted_payload, separators=(',', ':'))
+    logger.info(f"Heleket request body: {json_data}")
+
     base64_data = base64.b64encode(json_data.encode()).decode()
     api_key = HELEKET_API_KEY.strip()
     merchant_id = HELEKET_MERCHANT_ID.strip()
     sign = hashlib.md5((base64_data + api_key).encode()).hexdigest()
+    logger.info(f"Heleket sign: {sign}")
 
     headers = {
         "merchant": merchant_id,
@@ -96,15 +99,17 @@ async def create_heleket_payment(amount: float, order_id: str, description: str,
     async with aiohttp.ClientSession() as session:
         async with session.post(f"{HELEKET_API_URL}/payment", headers=headers, data=json_data) as resp:
             response_text = await resp.text()
-            logger.info(f"Heleket response: {resp.status} {response_text}")
+            logger.info(f"Heleket response status: {resp.status}")
+            logger.info(f"Heleket response body: {response_text}")
             if resp.status != 200:
                 raise Exception(f"Heleket HTTP error {resp.status}: {response_text}")
             response_json = json.loads(response_text)
             if response_json.get('state') != 0:
                 raise Exception(f"Heleket error: {response_json}")
-            return response_json['result']   # содержит uuid, url, payer_amount, payer_currency и др.
+            return response_json['result']   # содержит uuid, url и другие поля
 
 async def check_heleket_payment(payment_uuid: str):
+    """Проверяет статус платежа по UUID."""
     payload = {"uuid": payment_uuid}
     json_data = json.dumps(payload, separators=(',', ':'))
     base64_data = base64.b64encode(json_data.encode()).decode()
@@ -127,4 +132,4 @@ async def check_heleket_payment(payment_uuid: str):
             if response_json.get('state') != 0:
                 logger.error(f"Heleket payment info error: {response_json}")
                 return None
-            return response_json['result'].get('payment_status')
+            return response_json['result'].get('payment_status')  # "paid", "pending", "cancel" и т.д.
