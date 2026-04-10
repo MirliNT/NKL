@@ -24,7 +24,11 @@ from .users import (
     unban_user,
     has_accepted_terms,
     accept_terms,
-    get_all_users
+    get_all_users,
+    get_user_reg_date,        # <-- добавить
+    get_user_spent,           # <-- добавить
+    get_user_orders_count,    # <-- добавить
+    get_user_orders           # <-- добавить
 )
 
 from .orders import (
