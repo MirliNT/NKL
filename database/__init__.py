@@ -132,4 +132,5 @@ __all__ = [
     'get_setting',
     'set_setting',
     'get_all_settings',
+    'update_order_external',
 ]
