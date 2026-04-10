@@ -125,13 +125,14 @@ async def search_order(message: Message):
         return
 
     status_text = {
-        "NEW": "🆕 Новый",
-        "PENDING": "⏳ Ожидает оплаты",
-        "WAITING_CONFIRM": "🕒 Ожидает подтверждения",
-        "PAID": "✅ Оплачен",
-        "ACCEPTED": "📦 Принят в работу",
-        "DECLINED": "❌ Отклонён"
-    }.get(order[6], order[6])
+    "NEW": "🆕 Новый",
+    "PENDING": "⏳ Ожидает оплаты",
+    "WAITING_CONFIRM": "🕒 Ожидает подтверждения",
+    "PROCESSING": "🔄 Выполняется",
+    "PAID": "✅ Оплачен",
+    "ACCEPTED": "📦 Принят в работу",
+    "DECLINED": "❌ Отклонён"
+}.get(order[6], order[6])
 
     service_info = order[7] or "не указано"
     response = f"""
