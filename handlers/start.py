@@ -194,12 +194,17 @@ async def profile_topup_history(call: CallbackQuery):
     await call.answer()
     txs = await db.get_transactions(call.from_user.id, 20)
     if not txs:
-        text = "📜 История пополнений пуста."
+        text = f"<tg-emoji emoji-id=\"5258477770735885832\">📄</tg-emoji><b>История пополнений пуста</b>!"
     else:
-        text = "📜 <b>История пополнений (последние 20):</b>\n"
+        text = f"<b><tg-emoji emoji-id=\"5258477770735885832\">📄</tg-emoji></b><b>История пополнений (последние 20 пополнений):</b>\n\n"
         for tx in txs:
-            status_emoji = "✅" if tx[4] == "success" else "❌"
-            text += f"{status_emoji} {tx[6][:10]} +{tx[2]:.2f} руб. ({tx[3]})\n"
+            if tx[4] == "success":
+                status_emoji = "<tg-emoji emoji-id=\"5206607081334906820\">✔️</tg-emoji>"
+            else:
+                status_emoji = "<tg-emoji emoji-id=\"5980869107891838347\">❌</tg-emoji>"
+            text += f"{status_emoji} <b>{tx[6][:10]}</b> +{tx[2]:.2f} руб. (<i>{tx[3]}</i>)\n"
+        text += f"\n<b><tg-emoji emoji-id=\"5980869107891838347\">❌</tg-emoji></b> <b>- значит что оплата не прошла</b>\n"
+        text += f"<b><tg-emoji emoji-id=\"5206607081334906820\">✔️</tg-emoji></b> <b>- значит что оплата была произведена</b>"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="profile")]])
     await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
