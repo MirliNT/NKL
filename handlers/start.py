@@ -57,13 +57,12 @@ async def check_ban_and_terms(user_id: int) -> bool:
 
 async def show_main_menu(chat_id: int):
     balance = await db.get_balance(chat_id)
-    # Новый текст с премиум-эмодзи
     text = f"""
 <tg-emoji emoji-id="5440431182602842059">👋</tg-emoji><b>Добро пожаловать в сервис для накрутки статистики в ваши соцсети и не только!
 
 </b><blockquote expandable><b>Почему выбирают нас?
 • Большой ассортимент товаров
-• Тех. поддержка, которая готова помочь вам всегда
+• Тех. поддержка, которая готова помочь вам
 • Качество
 • Низкие цены и не только</b></blockquote><b>
 ﻿
@@ -127,34 +126,68 @@ async def profile_menu(call: CallbackQuery):
     balance = await db.get_balance(user_id)
     reg_date = await db.get_user_reg_date(user_id)
     if reg_date:
-        reg_str = reg_date.strftime("%d.%m.%Y %H:%M")
+        reg_str = reg_date.strftime("%d.%m.%Y")  # только дата, без минут
     else:
         reg_str = "неизвестно"
     spent = await db.get_user_spent(user_id)
     orders_count = await db.get_user_orders_count(user_id)
     if user_id == OWNER_ID:
-        role = "👑 Владелец"
+        role = "Владелец"
     elif await db.is_admin(user_id):
-        role = "⭐ Администратор"
+        role = "Администратор"
     else:
-        role = "👤 Пользователь"
+        role = "Пользователь"
 
     text = f"""
-<b>👤 Ваш профиль</b>
+<b><tg-emoji emoji-id="5258011929993026890">👤</tg-emoji></b><b>Ваш профиль.
 
-🆔 <b>ID:</b> {user_id}
-💰 <b>Баланс:</b> {balance:.2f} руб.
-💸 <b>Потрачено всего:</b> {spent:.2f} руб.
-📦 <b>Выполнено заказов:</b> {orders_count}
-📅 <b>Дата регистрации:</b> {reg_str}
-🔰 <b>Статус:</b> {role}
-    """
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 История пополнений", callback_data="profile_topup_history")],
-        [InlineKeyboardButton(text="📋 История заказов", callback_data="profile_orders_history")],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")]
-    ])
-    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+</b><b><tg-emoji emoji-id="5334890573281114250">🆔</tg-emoji></b><b>Ваш ID: {user_id}
+</b><b><tg-emoji emoji-id="4958926882994127612">💰</tg-emoji></b><b>Ваш баланс : {balance:.2f} руб.
+</b><b><tg-emoji emoji-id="5444856076954520455">🧾</tg-emoji></b><b>Вы потратили: {spent:.2f} руб.
+</b><b><tg-emoji emoji-id="5967456680940671207">🗃</tg-emoji></b><b>Выполнено заказов: {orders_count}
+</b><b><tg-emoji emoji-id="5872756762347573066">⏲</tg-emoji></b><b>Вы в боте с: {reg_str}
+</b><b><tg-emoji emoji-id="5386748326240611247">✅</tg-emoji></b><b>Ваш статус: {role}</b>
+"""
+    # Клавиатура с кастомными иконками
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "История пополнений",
+                    "callback_data": "profile_topup_history",
+                    "icon_custom_emoji_id": "5258477770735885832"
+                }
+            ],
+            [
+                {
+                    "text": "История заказов",
+                    "callback_data": "profile_orders_history",
+                    "icon_custom_emoji_id": "5258514780469075716"
+                }
+            ],
+            [
+                {
+                    "text": "◀️ Назад",
+                    "callback_data": "back_to_main"
+                }
+            ]
+        ]
+    }
+    # Отправляем сообщение с клавиатурой через прямой API-вызов
+    async with aiohttp.ClientSession() as session:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True
+        }
+        try:
+            await call.message.delete()
+        except:
+            pass
+        await session.post(url, json=payload)
 
 @router.callback_query(F.data == "profile_topup_history")
 async def profile_topup_history(call: CallbackQuery):
