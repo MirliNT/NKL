@@ -1,5 +1,6 @@
 import logging
 from typing import Optional, Tuple, List
+from datetime import datetime
 from .core import execute, fetchone, fetchall, get_connection
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,6 @@ async def create_users_table(conn):
 
 async def add_user(user_id: int):
     """Добавляет пользователя, если его нет, и устанавливает created_at."""
-    # Используем INSERT OR IGNORE, чтобы не перезаписывать существующего
     await execute('INSERT OR IGNORE INTO users (user_id, created_at) VALUES (?, datetime("now"))', (user_id,))
 
 async def get_balance(user_id: int) -> float:
@@ -80,8 +80,6 @@ async def get_user_reg_date(user_id: int) -> Optional[datetime]:
     """Возвращает дату регистрации пользователя."""
     row = await fetchone('SELECT created_at FROM users WHERE user_id = ?', (user_id,))
     if row and row[0]:
-        # Преобразуем строку в datetime, если нужно
-        from datetime import datetime
         if isinstance(row[0], str):
             return datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
         return row[0]
