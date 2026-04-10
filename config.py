@@ -32,3 +32,7 @@ DEFAULT_SETTINGS = {
     "default_price": "1.0",
     "currency": "RUB",
 }
+
+# VexBoost
+VEXBOOST_API_KEY = "6UZdLUYpjwHml580wI42vJKhzqtngaroNfBjie78JgJFreBiwNpXQQnY87qB"           # получите у VexBoost
+VEXBOOST_API_URL = "https://vexboost.ru/api/v2"
