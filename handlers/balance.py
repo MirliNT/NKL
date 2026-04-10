@@ -11,7 +11,6 @@ from config import DB_PATH
 from states.states import BalanceTopup
 import database as db
 from utils.payments import create_yookassa_payment, create_heleket_payment, check_yookassa_payment, check_heleket_payment
-import settings
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -20,23 +19,56 @@ logger = logging.getLogger(__name__)
 async def balance_menu(call: CallbackQuery):
     await call.answer()
     balance = await db.get_balance(call.from_user.id)
+    # Формируем текст с кастомными эмодзи
     text = f"""
-<b>💰 Ваш баланс: {balance:.2f} руб.
+<tg-emoji emoji-id="4958926882994127612">💰</tg-emoji><b>Ваш баланс: {balance:.2f} руб.
 
-Пополняя баланс вы соглашаетесь с</b> <a href="https://t.me/your_offer_link">пользовательским соглашением</a> <b>и</b> <a href="https://t.me/your_terms_link">договором оферты </a><b>
-Выберите способ пополнения из списка ниже:</b>
+</b><b><tg-emoji emoji-id="5204330443725347173">⭐️</tg-emoji></b><b>Выберите способ оплаты из списка ниже</b>:
     """
-    kb = InlineKeyboardBuilder()
-    kb.button(text="💳 СБП, QR, Карты (от 10₽)", callback_data="topup_yookassa")
-    kb.button(text="Криптовалюта (от 10₽)", callback_data="topup_heleket")
-    kb.button(text="◀️ Назад", callback_data="back_to_main")
-    kb.adjust(1)
-    await call.message.edit_text(
-        text,
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    # Создаём клавиатуру вручную через словарь (чтобы добавить icon_custom_emoji_id)
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "СБП, QR, КАРТА",
+                    "callback_data": "topup_yookassa",
+                    "icon_custom_emoji_id": "5463197305295373989"
+                }
+            ],
+            [
+                {
+                    "text": "Криптовалюта",
+                    "callback_data": "topup_heleket",
+                    "icon_custom_emoji_id": "5452069891139994051"
+                }
+            ],
+            [
+                {
+                    "text": "◀️ Назад",
+                    "callback_data": "back_to_main"
+                }
+            ]
+        ]
+    }
+    # Отправляем сообщение с клавиатурой через прямой API-вызов (чтобы поддержать иконки)
+    import aiohttp
+    import json
+    from config import BOT_TOKEN
+    async with aiohttp.ClientSession() as session:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": call.from_user.id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True
+        }
+        # Если нужно заменить предыдущее сообщение, можно сначала удалить
+        try:
+            await call.message.delete()
+        except:
+            pass
+        await session.post(url, json=payload)
 
 @router.callback_query(F.data == "topup_yookassa")
 async def topup_yookassa_start(call: CallbackQuery, state: FSMContext):
@@ -44,8 +76,8 @@ async def topup_yookassa_start(call: CallbackQuery, state: FSMContext):
     await state.update_data(method="yookassa")
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Отмена", callback_data="balance")
-    await call.message.edit_text(
-        f"Введите сумму пополнения (от 10.00 руб.):",
+    await call.message.answer(
+        "Введите сумму пополнения (от 10.00 руб.):",
         reply_markup=kb.as_markup()
     )
     await state.set_state(BalanceTopup.waiting_amount)
@@ -56,7 +88,7 @@ async def topup_heleket_start(call: CallbackQuery, state: FSMContext):
     await state.update_data(method="heleket")
     kb = InlineKeyboardBuilder()
     kb.button(text="◀️ Отмена", callback_data="balance")
-    await call.message.edit_text(
+    await call.message.answer(
         "Введите сумму пополнения (от 10.00 руб.):",
         reply_markup=kb.as_markup()
     )
@@ -72,10 +104,38 @@ async def topup_amount(message: Message, state: FSMContext):
     if amount < 10.0:
         return await message.answer("Минимальная сумма пополнения: 10.00 руб.")
     await state.update_data(amount=amount)
-    if method == "heleket":
-        await create_heleket_topup(message, state, amount)
+    if method == "yookassa":
+        await create_yookassa_topup(message, state, amount)
     else:
-        await create_yookassa_topup(message, state, amount)  # если есть
+        await create_heleket_topup(message, state, amount)
+
+async def create_yookassa_topup(message: Message, state: FSMContext, amount: float):
+    try:
+        payment_data = await create_yookassa_payment(
+            amount=amount,
+            description=f"Пополнение баланса пользователя {message.from_user.id}",
+            order_id=f"topup_{message.from_user.id}_{uuid.uuid4().hex[:8]}",
+            user_id=message.from_user.id
+        )
+        payment_id = payment_data.get('id')
+        confirmation_url = payment_data.get('confirmation', {}).get('confirmation_url')
+        if not payment_id or not confirmation_url:
+            raise Exception("Missing payment data")
+        await db.add_transaction(message.from_user.id, amount, "yookassa", "pending", payment_id)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="СБП, QR, КАРТА", url=confirmation_url)
+        kb.button(text="✅ Проверить оплату", callback_data=f"check_topup_{payment_id}")
+        await message.answer(
+            f"Создан счёт на пополнение баланса на {amount:.2f} руб.\n"
+            "После оплаты нажмите «Проверить оплату».",
+            reply_markup=kb.as_markup(),
+            disable_web_page_preview=True
+        )
+        await state.clear()
+    except Exception as e:
+        logger.error(f"Topup error: {e}")
+        await message.answer("Не удалось создать платёж. Попробуйте позже.")
+        await state.clear()
 
 async def create_heleket_topup(message: Message, state: FSMContext, amount: float):
     try:
@@ -91,7 +151,7 @@ async def create_heleket_topup(message: Message, state: FSMContext, amount: floa
             raise Exception("Missing payment data")
         await db.add_transaction(message.from_user.id, amount, "heleket", "pending", payment_uuid)
         kb = InlineKeyboardBuilder()
-        kb.button(text="₿ Оплатить криптовалютой", url=payment_url)
+        kb.button(text="Оплатить криптовалютой", url=payment_url)
         kb.button(text="✅ Проверить оплату", callback_data=f"check_topup_{payment_uuid}")
         await message.answer(
             f"Создан счёт на пополнение баланса на {amount:.2f} руб.\n"
@@ -119,14 +179,12 @@ async def check_topup_callback(call: CallbackQuery):
     if tx[4] == "success":
         await call.message.answer("Этот платёж уже был обработан.")
         return
-    if tx[3] == "heleket":
-        status = await check_heleket_payment(payment_id)
-        success_status = "paid"
-    else:
-        # ЮKassa
-        from utils.payments import check_yookassa_payment
+    if tx[3] == "yookassa":
         status = await check_yookassa_payment(payment_id)
-        success_status = "succeeded"
+        success_status = 'succeeded'
+    else:
+        status = await check_heleket_payment(payment_id)
+        success_status = 'paid'
     if status == success_status:
         await db.update_balance(tx[1], tx[2])
         async with aiosqlite.connect(DB_PATH) as conn:
@@ -135,19 +193,4 @@ async def check_topup_callback(call: CallbackQuery):
         await call.message.edit_text(f"✅ Баланс пополнен на {tx[2]:.2f} руб.", reply_markup=None)
         await call.message.answer("Теперь вы можете заказывать услуги.")
     else:
-        await call.message.answer(f"❌ Платёж не оплачен (статус: {status}). Попробуйте позже или обратитесь в поддержку.")
-
-@router.callback_query(F.data == "topup_history")
-async def topup_history(call: CallbackQuery):
-    await call.answer()
-    txs = await db.get_transactions(call.from_user.id, 10)
-    if not txs:
-        text = "📜 История пополнений пуста."
-    else:
-        text = "📜 <b>Последние пополнения баланса:</b>\n"
-        for tx in txs:
-            status_emoji = "✅" if tx[4] == "success" else "❌"
-            text += f"{status_emoji} {tx[6][:10]} +{tx[2]:.2f} руб. ({tx[3]})\n"
-    kb = InlineKeyboardBuilder()
-    kb.button(text="◀️ Назад", callback_data="balance")
-    await call.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        await call.message.answer(f"❌ Платёж не прошел. Попробуйте позже.")
