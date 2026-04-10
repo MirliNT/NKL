@@ -9,6 +9,7 @@ from middlewares.bot_status import BotStatusMiddleware
 from handlers import start, order, balance, admin, payment, common
 from database.core import init_db
 from utils.cache import get_admins
+from utils.vexboost import get_orders_status
 
 # Настройка логирования
 if not os.path.exists('logs'):
