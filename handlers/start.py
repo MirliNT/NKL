@@ -1,7 +1,8 @@
 import os
 import logging
+from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -9,15 +10,12 @@ from bot_instance import bot
 from config import OWNER_ID, PHOTO_PATH
 from keyboards import get_main_keyboard
 import database as db
-from datetime import datetime
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 router = Router()
 logger = logging.getLogger(__name__)
 
 # ====== Вспомогательные функции ======
 async def is_bot_available(user_id: int) -> bool:
-    """Проверяет доступность бота для пользователя (админы и владелец всегда могут использовать)."""
     if user_id == OWNER_ID or await db.is_admin(user_id):
         return True
     if await db.is_banned(user_id):
@@ -25,7 +23,6 @@ async def is_bot_available(user_id: int) -> bool:
     return await db.is_bot_active()
 
 async def check_ban_and_terms(user_id: int) -> bool:
-    """Проверяет бан и принятие оферты. Возвращает True, если доступ запрещён."""
     if not await is_bot_available(user_id):
         bot_status = await db.get_bot_status()
         if bot_status.get('active') == '0':
@@ -57,7 +54,6 @@ async def check_ban_and_terms(user_id: int) -> bool:
     return False
 
 async def show_main_menu(chat_id: int):
-    """Отправляет главное меню с фото (если есть) и кнопками."""
     balance = await db.get_balance(chat_id)
     text = f"""
 <b>Приветствую!</b> <tg-emoji emoji-id="5877700484453634587">✈️</tg-emoji>
@@ -95,3 +91,75 @@ async def accept_terms_callback(call: CallbackQuery):
     await db.accept_terms(call.from_user.id)
     await call.message.edit_text("✅ Вы приняли договор оферты и политику конфиденциальности. Теперь вы можете пользоваться ботом.")
     await show_main_menu(call.from_user.id)
+
+# ====== Профиль и его подразделы ======
+@router.callback_query(F.data == "profile")
+async def profile_menu(call: CallbackQuery):
+    await call.answer()
+    user_id = call.from_user.id
+    balance = await db.get_balance(user_id)
+    reg_date = await db.get_user_reg_date(user_id)
+    if reg_date:
+        reg_str = reg_date.strftime("%d.%m.%Y %H:%M")
+    else:
+        reg_str = "неизвестно"
+    spent = await db.get_user_spent(user_id)
+    orders_count = await db.get_user_orders_count(user_id)
+    if user_id == OWNER_ID:
+        role = "👑 Владелец"
+    elif await db.is_admin(user_id):
+        role = "⭐ Администратор"
+    else:
+        role = "👤 Пользователь"
+
+    text = f"""
+<b>👤 Ваш профиль</b>
+
+🆔 <b>ID:</b> {user_id}
+💰 <b>Баланс:</b> {balance:.2f} руб.
+💸 <b>Потрачено всего:</b> {spent:.2f} руб.
+📦 <b>Выполнено заказов:</b> {orders_count}
+📅 <b>Дата регистрации:</b> {reg_str}
+🔰 <b>Статус:</b> {role}
+    """
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📜 История пополнений", callback_data="profile_topup_history")],
+        [InlineKeyboardButton(text="📋 История заказов", callback_data="profile_orders_history")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")]
+    ])
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+@router.callback_query(F.data == "profile_topup_history")
+async def profile_topup_history(call: CallbackQuery):
+    await call.answer()
+    txs = await db.get_transactions(call.from_user.id, 20)
+    if not txs:
+        text = "📜 История пополнений пуста."
+    else:
+        text = "📜 <b>История пополнений (последние 20):</b>\n"
+        for tx in txs:
+            status_emoji = "✅" if tx[4] == "success" else "❌"
+            text += f"{status_emoji} {tx[6][:10]} +{tx[2]:.2f} руб. ({tx[3]})\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="profile")]])
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+
+@router.callback_query(F.data == "profile_orders_history")
+async def profile_orders_history(call: CallbackQuery):
+    await call.answer()
+    orders = await db.get_user_orders(call.from_user.id, 20)
+    if not orders:
+        text = "📋 История заказов пуста."
+    else:
+        text = "📋 <b>История заказов (последние 20):</b>\n"
+        for order in orders:
+            # order: order_id, user_id, service_id, quantity, price, link, status, comment, ...
+            # индексы могут отличаться, используем order[0], order[3], order[4], order[6], order[7], order[11]
+            status_emoji = {
+                "PAID": "✅", "ACCEPTED": "📦", "DECLINED": "❌",
+                "PROCESSING": "🔄", "WAITING_CONFIRM": "🕒", "NEW": "🆕"
+            }.get(order[6], "❓")
+            # service name берем из комментария или отдельной таблицы
+            service_name = order[7] if order[7] else f"Услуга #{order[2]}"
+            text += f"{status_emoji} {order[0]} – {service_name} x{order[3]} – {order[4]:.2f} руб. ({order[11][:10]})\n"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="profile")]])
+    await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
