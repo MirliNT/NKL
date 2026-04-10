@@ -213,15 +213,38 @@ async def profile_orders_history(call: CallbackQuery):
     await call.answer()
     orders = await db.get_user_orders(call.from_user.id, 20)
     if not orders:
-        text = "📋 История заказов пуста."
+        text = f"<tg-emoji emoji-id=\"5258514780469075716\">📂</tg-emoji><b>История заказов пуста.</b>"
     else:
-        text = "📋 <b>История заказов (последние 20):</b>\n"
+        text = f"<b><tg-emoji emoji-id=\"5258514780469075716\">📂</tg-emoji></b><b>История заказов (последние 20 заказов):</b>\n\n"
         for order in orders:
-            status_emoji = {
-                "PAID": "✅", "ACCEPTED": "📦", "DECLINED": "❌",
-                "PROCESSING": "🔄", "WAITING_CONFIRM": "🕒", "NEW": "🆕"
-            }.get(order[6], "❓")
+            # Определяем статус и соответствующий эмодзи
+            status = order[6]  # status
+            if status == "PAID":
+                status_emoji = "<tg-emoji emoji-id=\"5980828932767750191\">✅</tg-emoji>"
+                status_text = "выполнен"
+            elif status == "DECLINED":
+                status_emoji = "<tg-emoji emoji-id=\"5980869107891838347\">❌</tg-emoji>"
+                status_text = "не выполнен"
+            elif status == "PARTIAL":
+                status_emoji = "<tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji>"
+                status_text = "выполнен частично"
+            elif status == "PROCESSING":
+                status_emoji = "<tg-emoji emoji-id=\"5260221883940347555\">🔫</tg-emoji>"
+                status_text = "выполняется"
+            elif status in ("WAITING_CONFIRM", "NEW", "PENDING"):
+                status_emoji = "<tg-emoji emoji-id=\"5386367538735104399\">⌛</tg-emoji>"
+                status_text = "в обработке"
+            else:
+                status_emoji = "❓"
+                status_text = status
+            # Формируем строку заказа
             service_name = order[7] if order[7] else f"Услуга #{order[2]}"
-            text += f"{status_emoji} {order[0]} – {service_name} x{order[3]} – {order[4]:.2f} руб. ({order[11][:10]})\n"
+            text += f"{status_emoji} <b>{order[0]}</b> – {service_name} x{order[3]} – {order[4]:.2f} руб. ({status_text})\n"
+        # Добавляем легенду
+        text += f"\n<b><tg-emoji emoji-id=\"5980828932767750191\">✅</tg-emoji></b> <b>- значит что заказ выполнен</b>\n"
+        text += f"<b><tg-emoji emoji-id=\"5980869107891838347\">❌</tg-emoji></b> <b>- значит что заказ не выполнен</b>\n"
+        text += f"<b><tg-emoji emoji-id=\"5447644880824181073\">⚠️</tg-emoji></b> <b>- значит что заказ выполнен частично</b>\n"
+        text += f"<b><tg-emoji emoji-id=\"5386367538735104399\">⌛</tg-emoji></b> <b>- значит что заказ в обработке (НЕ ВЫПОЛНЯЕТСЯ)</b>\n"
+        text += f"<b><tg-emoji emoji-id=\"5260221883940347555\">🔫</tg-emoji></b> <b>- значит что заказ выполняется</b>"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="profile")]])
     await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
