@@ -73,6 +73,17 @@ async def unban_cmd(message: Message):
     except:
         pass
 
+#======VexBoost comand======
+@router.message(Command("vexboost_balance"))
+async def vexboost_balance(message: Message):
+    if not await is_admin_from_db_or_config(message.from_user.id):
+        return
+    try:
+        bal = await get_balance()
+        await message.answer(f"💰 Баланс VexBoost: {bal['balance']} {bal['currency']}")
+    except Exception as e:
+        await message.answer(f"Ошибка: {e}")
+
 @router.message(Command("checkban"))
 async def check_ban(message: Message):
     if not await is_admin_from_db_or_config(message.from_user.id):
