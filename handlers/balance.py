@@ -27,30 +27,30 @@ async def balance_menu(call: CallbackQuery):
     """
     # Создаём клавиатуру вручную через словарь (чтобы добавить icon_custom_emoji_id)
     reply_markup = {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "СБП, QR, КАРТА",
-                    "callback_data": "topup_yookassa",
-                    "icon_custom_emoji_id": "5463197305295373989"
-                }
-            ],
-            [
-                {
-                    "text": "Криптовалюта",
-                    "callback_data": "topup_heleket",
-                    "icon_custom_emoji_id": "5452069891139994051"
-                }
-            ],
-            [
-                {
-                    "text": "Назад",
-                    "callback_data": "back_to_main"
-                    "icon_custom_emoji_id": "5258236805890710909"
-                }
-            ]
+    "inline_keyboard": [
+        [
+            {
+                "text": "СБП, QR, КАРТА",
+                "callback_data": "topup_yookassa",
+                "icon_custom_emoji_id": "5463197305295373989"
+            }
+        ],
+        [
+            {
+                "text": "Криптовалюта",
+                "callback_data": "topup_heleket",
+                "icon_custom_emoji_id": "5452069891139994051"
+            }
+        ],
+        [
+            {
+                "text": "Назад",
+                "callback_data": "back_to_main",
+                "icon_custom_emoji_id": "5258236805890710909"
+            }
         ]
-    }
+    ]
+}
     # Отправляем сообщение с клавиатурой через прямой API-вызов (чтобы поддержать иконки)
     import aiohttp
     import json
