@@ -57,16 +57,20 @@ async def check_ban_and_terms(user_id: int) -> bool:
 
 async def show_main_menu(chat_id: int):
     balance = await db.get_balance(chat_id)
+    # Новый текст с премиум-эмодзи
     text = f"""
-<b>Приветствую!</b> <tg-emoji emoji-id="5877700484453634587">✈️</tg-emoji>
-<b>Добро пожаловать в бота для накрутки статистики пользователей, просмотров и реакций
+<tg-emoji emoji-id="5440431182602842059">👋</tg-emoji><b>Добро пожаловать в сервис для накрутки статистики в ваши соцсети и не только!
 
-</b><blockquote><tg-emoji emoji-id="5870994129244131212">👤</tg-emoji> <b>Тех.поддержка: </b>@nBoost_supports<b>
-</b><tg-emoji emoji-id="5870995486453796729">📊</tg-emoji> <b>Наш канал: </b>@channel_username</blockquote>
-<a href="https://t.me/your_offer_link">Договор оферты</a> • <a href="https://t.me/your_terms_link">Пользовательское соглашение</a>
+</b><blockquote expandable><b>Почему выбирают нас?
+• Большой ассортимент товаров
+• Тех. поддержка, которая готова помочь вам
+• Качество
+• Низкие цены и не только</b></blockquote><b>
+﻿
+</b><b><tg-emoji emoji-id="4958926882994127612">💰</tg-emoji></b><b>Ваш баланс: {balance:.2f} руб.
 
-<b>💰 Ваш баланс: {balance:.2f} руб.</b>
-    """
+Выберите действие в меню ниже:</b>
+"""
     reply_markup = get_main_keyboard_dict()
     async with aiohttp.ClientSession() as session:
         if os.path.exists(PHOTO_PATH):
