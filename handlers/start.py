@@ -1,5 +1,7 @@
 import os
 import logging
+import aiohttp
+import json
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -7,8 +9,8 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot_instance import bot
-from config import OWNER_ID, PHOTO_PATH
-from keyboards import get_main_keyboard
+from config import OWNER_ID, PHOTO_PATH, BOT_TOKEN
+from keyboards.main import get_main_keyboard_dict
 import database as db
 
 router = Router()
@@ -65,16 +67,37 @@ async def show_main_menu(chat_id: int):
 
 <b>💰 Ваш баланс: {balance:.2f} руб.</b>
     """
-    kb = get_main_keyboard()
-    if os.path.exists(PHOTO_PATH):
-        try:
-            photo = FSInputFile(PHOTO_PATH)
-            await bot.send_photo(chat_id, photo, caption=text, reply_markup=kb, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Failed to send photo: {e}")
-            await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
-    else:
-        await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    reply_markup = get_main_keyboard_dict()
+    async with aiohttp.ClientSession() as session:
+        if os.path.exists(PHOTO_PATH):
+            form_data = aiohttp.FormData()
+            form_data.add_field('chat_id', str(chat_id))
+            form_data.add_field('caption', text)
+            form_data.add_field('parse_mode', 'HTML')
+            form_data.add_field('reply_markup', json.dumps(reply_markup))
+            form_data.add_field('photo', open(PHOTO_PATH, 'rb'), filename='photo.jpg')
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            async with session.post(url, data=form_data) as resp:
+                if resp.status != 200:
+                    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                    payload = {
+                        "chat_id": chat_id,
+                        "text": text,
+                        "parse_mode": "HTML",
+                        "reply_markup": reply_markup,
+                        "disable_web_page_preview": True
+                    }
+                    await session.post(url, json=payload)
+        else:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "reply_markup": reply_markup,
+                "disable_web_page_preview": True
+            }
+            await session.post(url, json=payload)
 
 # ====== Хендлеры ======
 @router.message(Command("start"))
@@ -152,13 +175,10 @@ async def profile_orders_history(call: CallbackQuery):
     else:
         text = "📋 <b>История заказов (последние 20):</b>\n"
         for order in orders:
-            # order: order_id, user_id, service_id, quantity, price, link, status, comment, ...
-            # индексы могут отличаться, используем order[0], order[3], order[4], order[6], order[7], order[11]
             status_emoji = {
                 "PAID": "✅", "ACCEPTED": "📦", "DECLINED": "❌",
                 "PROCESSING": "🔄", "WAITING_CONFIRM": "🕒", "NEW": "🆕"
             }.get(order[6], "❓")
-            # service name берем из комментария или отдельной таблицы
             service_name = order[7] if order[7] else f"Услуга #{order[2]}"
             text += f"{status_emoji} {order[0]} – {service_name} x{order[3]} – {order[4]:.2f} руб. ({order[11][:10]})\n"
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="profile")]])
