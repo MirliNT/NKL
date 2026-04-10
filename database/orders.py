@@ -78,3 +78,10 @@ async def get_processing_vexboost_orders():
         "SELECT order_id, external_order_id, user_id, quantity, price, comment "
         "FROM orders WHERE status = 'PROCESSING' AND external_provider = 'vexboost'"
     )
+
+async def update_order_external(order_id: str, external_service_id: int, external_order_id: int, provider: str = "vexboost"):
+    """Сохраняет внешние идентификаторы заказа (VexBoost и т.п.)."""
+    await execute(
+        'UPDATE orders SET external_service_id = ?, external_order_id = ?, external_provider = ? WHERE order_id = ?',
+        (external_service_id, external_order_id, provider, order_id)
+    )
