@@ -33,7 +33,8 @@ from .orders import (
     update_order_status,
     update_order_payment_id,
     update_order_payment_method,
-    get_orders_by_status
+    get_orders_by_status,
+    update_order_external,   # <-- добавить
 )
 
 from .services import (
