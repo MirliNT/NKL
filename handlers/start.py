@@ -150,30 +150,30 @@ async def profile_menu(call: CallbackQuery):
 """
     # Клавиатура с кастомными иконками
     reply_markup = {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "История пополнений",
-                    "callback_data": "profile_topup_history",
-                    "icon_custom_emoji_id": "5258477770735885832"
-                }
-            ],
-            [
-                {
-                    "text": "История заказов",
-                    "callback_data": "profile_orders_history",
-                    "icon_custom_emoji_id": "5258514780469075716"
-                }
-            ],
-            [
-                {
-                    "text": "◀️ Назад",
-                    "callback_data": "back_to_main"
-                    "icon_custom_emoji_id": "5258236805890710909"
-                }
-            ]
+    "inline_keyboard": [
+        [
+            {
+                "text": "СБП, QR, КАРТА",
+                "callback_data": "topup_yookassa",
+                "icon_custom_emoji_id": "5463197305295373989"
+            }
+        ],
+        [
+            {
+                "text": "Криптовалюта",
+                "callback_data": "topup_heleket",
+                "icon_custom_emoji_id": "5452069891139994051"
+            }
+        ],
+        [
+            {
+                "text": "Назад",
+                "callback_data": "back_to_main",
+                "icon_custom_emoji_id": "5258236805890710909"
+            }
         ]
-    }
+    ]
+}
     # Отправляем сообщение с клавиатурой через прямой API-вызов
     async with aiohttp.ClientSession() as session:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
