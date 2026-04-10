@@ -6,42 +6,42 @@ def get_main_keyboard_dict():
         "inline_keyboard": [
             [
                 {
-                    "text": "🛒 Заказать накрутку",
+                    "text": "Заказать накрутку",
                     "callback_data": "order",
                     "icon_custom_emoji_id": "5981010163207772807"
                 }
             ],
             [
                 {
-                    "text": "🧮 Калькулятор",
+                    "text": "Калькулятор",
                     "callback_data": "calc",
                     "icon_custom_emoji_id": "5303214794336125778"
                 }
             ],
             [
                 {
-                    "text": "💰 Пополнить баланс",
+                    "text": "Пополнить баланс",
                     "callback_data": "balance",
                     "icon_custom_emoji_id": "4958926882994127612"
                 }
             ],
             [
                 {
-                    "text": "👤 Профиль",
+                    "text": "Профиль",
                     "callback_data": "profile",
                     "icon_custom_emoji_id": "5258011929993026890"
                 }
             ],
             [
                 {
-                    "text": "🛠 Тех. Поддержка",
+                    "text": "Тех. Поддержка",
                     "callback_data": "support",
                     "icon_custom_emoji_id": "5823268688874179761"
                 }
             ],
             [
                 {
-                    "text": "❓ Частые вопросы",
+                    "text": "Частые вопросы",
                     "callback_data": "faq",
                     "icon_custom_emoji_id": "5386720808385142159"
                 }
