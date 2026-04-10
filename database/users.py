@@ -26,12 +26,18 @@ async def create_users_table(conn):
         ('banned_by', 'INTEGER'),
         ('banned_at', 'TIMESTAMP'),
         ('ban_reason', 'TEXT'),
-        ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        ('created_at', 'TIMESTAMP')   # без DEFAULT
     ]:
         try:
             await conn.execute(f'SELECT {col} FROM users LIMIT 1')
         except:
-            await conn.execute(f'ALTER TABLE users ADD COLUMN {col} {col_type}')
+            if col == 'created_at':
+                # Добавляем колонку без DEFAULT
+                await conn.execute(f'ALTER TABLE users ADD COLUMN {col} TIMESTAMP')
+                # Заполняем существующие записи текущей датой
+                await conn.execute(f'UPDATE users SET {col} = CURRENT_TIMESTAMP WHERE {col} IS NULL')
+            else:
+                await conn.execute(f'ALTER TABLE users ADD COLUMN {col} {col_type}')
     logger.info("Table 'users' ready")
 
 async def add_user(user_id: int):
