@@ -1,11 +1,11 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 def get_main_keyboard():
-    """Клавиатура главного меню."""
     builder = InlineKeyboardBuilder()
     builder.button(text="🛒 Заказать накрутку", callback_data="order")
     builder.button(text="🧮 Калькулятор", callback_data="calc")
     builder.button(text="💰 Баланс", callback_data="balance")
+    builder.button(text="👤 Профиль", callback_data="profile")   # <-- новая кнопка
     builder.button(text="🛠 Тех. Поддержка", callback_data="support")
     builder.button(text="❓ Частые вопросы", callback_data="faq")
     builder.adjust(1)
