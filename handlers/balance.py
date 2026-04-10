@@ -29,7 +29,6 @@ async def balance_menu(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(text="💳 СБП, QR, Карты (от 10₽)", callback_data="topup_yookassa")
     kb.button(text="Криптовалюта (от 10₽)", callback_data="topup_heleket")
-    kb.button(text="📜 История пополнений", callback_data="topup_history")
     kb.button(text="◀️ Назад", callback_data="back_to_main")
     kb.adjust(1)
     await call.message.edit_text(
