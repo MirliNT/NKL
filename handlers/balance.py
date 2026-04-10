@@ -44,7 +44,7 @@ async def balance_menu(call: CallbackQuery):
             ],
             [
                 {
-                    "text": "◀️ Назад",
+                    "text": "Назад",
                     "callback_data": "back_to_main"
                     "icon_custom_emoji_id": "5258236805890710909"
                 }
