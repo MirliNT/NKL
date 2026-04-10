@@ -80,7 +80,7 @@ async def tg_sub_duration(call: CallbackQuery, state: FSMContext):
     # Для подписчиков на 1 день используем VexBoost (пример)
     vexboost_service_id = None
     if key == "day":
-        vexboost_service_id = 1   # реальный ID из VexBoost
+        vexboost_service_id = 2972  # реальный ID из VexBoost
     await state.update_data(subtype=name, service_name=f"Подписчики Telegram ({name})", vexboost_service_id=vexboost_service_id)
     await call.message.edit_text(f"Выбраны подписчики Telegram: {name}\nВведите количество (минимум 100):")
     await state.set_state(OrderState.waiting_quantity)
