@@ -137,4 +137,8 @@ __all__ = [
     'set_setting',
     'get_all_settings',
     'update_order_external',
+    'get_user_reg_date',      # <-- добавить
+    'get_user_spent',         # <-- добавить
+    'get_user_orders_count',  # <-- добавить
+    'get_user_orders',        # <-- добавить
 ]
