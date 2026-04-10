@@ -153,16 +153,16 @@ async def profile_menu(call: CallbackQuery):
     "inline_keyboard": [
         [
             {
-                "text": "СБП, QR, КАРТА",
-                "callback_data": "topup_yookassa",
-                "icon_custom_emoji_id": "5463197305295373989"
+                "text": "История пополнений",
+                "callback_data": "profile_topup_history",
+                "icon_custom_emoji_id": "5258477770735885832"
             }
         ],
         [
             {
-                "text": "Криптовалюта",
-                "callback_data": "topup_heleket",
-                "icon_custom_emoji_id": "5452069891139994051"
+                "text": "История заказов",
+                "callback_data": "profile_orders_history",
+                "icon_custom_emoji_id": "5258514780469075716"
             }
         ],
         [
