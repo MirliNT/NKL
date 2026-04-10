@@ -5,6 +5,7 @@ from .core import execute, fetchone, fetchall
 logger = logging.getLogger(__name__)
 
 async def create_orders_table(conn):
+    """Создаёт таблицу orders, если её нет."""
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS orders (
             order_id TEXT PRIMARY KEY,
@@ -19,16 +20,23 @@ async def create_orders_table(conn):
             payment_charge_id TEXT,
             payment_method TEXT,
             promocode TEXT,
+            external_service_id INTEGER,
+            external_order_id INTEGER,
+            external_provider TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Добавляем недостающие колонки
     for col, col_type in [
         ('service_id', 'INTEGER'),
         ('payment_id', 'TEXT'),
         ('payment_charge_id', 'TEXT'),
         ('payment_method', 'TEXT'),
         ('promocode', 'TEXT'),
-        ('comment', 'TEXT')
+        ('comment', 'TEXT'),
+        ('external_service_id', 'INTEGER'),
+        ('external_order_id', 'INTEGER'),
+        ('external_provider', 'TEXT')
     ]:
         try:
             await conn.execute(f'SELECT {col} FROM orders LIMIT 1')
@@ -57,3 +65,16 @@ async def update_order_payment_method(order_id: str, method: str):
 
 async def get_orders_by_status(status: str) -> List[Tuple]:
     return await fetchall('SELECT * FROM orders WHERE status = ?', (status,))
+
+async def update_order_external(order_id: str, external_service_id: int, external_order_id: int, provider: str = "vexboost"):
+    await execute(
+        'UPDATE orders SET external_service_id = ?, external_order_id = ?, external_provider = ? WHERE order_id = ?',
+        (external_service_id, external_order_id, provider, order_id)
+    )
+
+async def get_processing_vexboost_orders():
+    """Возвращает заказы в статусе PROCESSING с external_provider = 'vexboost'."""
+    return await fetchall(
+        "SELECT order_id, external_order_id, user_id, quantity, price, comment "
+        "FROM orders WHERE status = 'PROCESSING' AND external_provider = 'vexboost'"
+    )
